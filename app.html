@@ -966,7 +966,16 @@ function parsePrice(v){ const n=parseFloat(String(v||'').replace(/[^0-9.]/g,''))
 function writeNumCell(sheet,excelRow,col,val){
   if(col<0||val===null) return false;
   const addr=XLSX.utils.encode_cell({r:excelRow-1,c:col});
-  sheet[addr]={t:'n',v:val,z:'#,##0.0000'};
+  const existing=sheet[addr]||{};
+  // Preserve original cell style (fill colour, font, borders etc.)
+  // Only update the value — everything else stays the same
+  sheet[addr]=Object.assign({},existing,{t:'n',v:val});
+  // Keep original number format if present, else use our default
+  if(!sheet[addr].z) sheet[addr].z='#,##0.0000';
+  // Remove cached display text and formula so Excel recalculates cleanly
+  delete sheet[addr].w;
+  delete sheet[addr].f;
+  // Expand sheet range if needed
   const ref=XLSX.utils.decode_range(sheet['!ref']||'A1:A1');
   ref.e.r=Math.max(ref.e.r,excelRow-1); ref.e.c=Math.max(ref.e.c,col);
   sheet['!ref']=XLSX.utils.encode_range(ref); return true;
@@ -974,7 +983,11 @@ function writeNumCell(sheet,excelRow,col,val){
 function writeStrCell(sheet,excelRow,col,val){
   if(col<0||!val) return;
   const addr=XLSX.utils.encode_cell({r:excelRow-1,c:col});
-  sheet[addr]={t:'s',v:String(val)};
+  const existing=sheet[addr]||{};
+  // Preserve original cell style — only update value
+  sheet[addr]=Object.assign({},existing,{t:'s',v:String(val)});
+  delete sheet[addr].w; // remove cached display text
+  delete sheet[addr].f; // remove any formula
 }
 
 function fillPricesDispatch(){
@@ -1007,123 +1020,217 @@ async function runXlUpdate(){
   const btn=document.getElementById('xl-btn');
   btn.disabled=true; btn.innerHTML='<div class="spin-sm"></div> Reading file...';
   try{
-    // ── 1. Read file ──────────────────────────────────────────────
+
+    // ── 1. Read entire file preserving all styles, formulas, formatting ───────
     const ab=await xlFile.arrayBuffer();
-    xlWorkbook=XLSX.read(ab,{type:'array'});
-    const sheet=xlWorkbook.Sheets[xlWorkbook.SheetNames[0]];
+    xlWorkbook=XLSX.read(ab,{type:'array',cellStyles:true,cellDates:true});
+    const sheetName=xlWorkbook.SheetNames[0];
+    const sheet=xlWorkbook.Sheets[sheetName];
     const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:''});
-    if(!rows.length) throw new Error('Spreadsheet is empty.');
+    if(!rows.length) throw new Error('Spreadsheet appears to be empty.');
+    const range=XLSX.utils.decode_range(sheet['!ref']||'A1:Z200');
 
-    // ── 2. Detect header row and column positions ─────────────────
-    const hIdx=findHeaderRow(rows);
-    const headers=rows[hIdx];
-    const aC=Math.max(findCol(headers,['azure price','azure/unit','azure (']),5);
-    const wC=Math.max(findCol(headers,['aws price','aws/unit','aws (']),7);
-    const gC=Math.max(findCol(headers,['gcp price','gcp/unit','gcp (']),9);
-    const aI=findCol(headers,['azure instance','azure sku','azure/sku']);
-    const wI=findCol(headers,['aws instance','aws sku','amazon instance']);
-    const gI=findCol(headers,['gcp instance','gcp sku','google instance']);
-    const cC=Math.max(findCol(headers,['cheapest','lowest','best price']),11);
+    // ── 2. Find header row — scan for price/provider keywords ─────────────────
+    const PRICE_KWS=['price','pricing','cost','rate','azure','aws','gcp','amazon','google','cloud'];
+    const PROVIDER_KWS=['azure','aws','amazon','gcp','google'];
+    const SKIP_KWS=['monthly','total','subtotal','formula','calc','sum','aed','usd','gbp','eur'];
 
-    // ── 3. Build data rows for AI — filter section headers, keep resources ──
-    const dataRows=[];
-    rows.slice(hIdx+1).forEach((r,i)=>{
-      const excelRow=hIdx+2+i;
-      const rowText=r.join(' ').trim();
-      // Skip blank rows, section header rows (short all-caps), formula rows
-      if(!rowText) return;
-      if(rowText.length<3) return;
-      const firstCell=String(r[0]||'').trim();
-      if(!firstCell||firstCell.startsWith('=')) return;
-      // Skip section separator rows (< 2 non-empty cells)
-      const nonEmpty=r.filter(c=>String(c||'').trim()).length;
-      if(nonEmpty<2) return;
-      dataRows.push({excelRow, cells:r.map(c=>String(c||'').replace(/\n/g,' ').slice(0,60))});
+    let headerRowIdx=0;
+    let maxScore=0;
+    for(let r=0;r<Math.min(rows.length,10);r++){
+      const rowStr=rows[r].join(' ').toLowerCase();
+      const score=PRICE_KWS.filter(k=>rowStr.includes(k)).length;
+      if(score>maxScore){ maxScore=score; headerRowIdx=r; }
+    }
+    const headers=rows[headerRowIdx]||[];
+
+    // ── 3. Identify "price candidate" columns ─────────────────────────────────
+    // A price column is one whose header contains price/provider keywords
+    // but NOT purely formula/monthly keywords
+    const priceColIdxs=new Set();
+    headers.forEach((h,c)=>{
+      const hl=String(h||'').toLowerCase().replace(/\n/g,' ');
+      const hasPrice=PRICE_KWS.some(k=>hl.includes(k));
+      const isSkip=SKIP_KWS.some(k=>hl.includes(k))&&!PROVIDER_KWS.some(k=>hl.includes(k));
+      if(hasPrice&&!isSkip) priceColIdxs.add(c);
     });
 
-    if(!dataRows.length) throw new Error('No data rows found in spreadsheet.');
+    // ── 4. Collect all cells that need filling ────────────────────────────────
+    // A cell needs filling if it is in a price column AND:
+    //   (a) contains a placeholder like "← AI fills", "TBD", "TBC", "—", "-"
+    //   (b) is completely empty
+    //   (c) contains a non-numeric string (i.e. not already a real price)
+    // AND its row has a meaningful resource name (not a section header / blank row)
 
-    // ── 4. Process in batches of 15 rows (avoids token limit) ────
-    const BATCH=15;
-    let allUpdates=[], totalPriceCount=0, totalRowCount=0;
-    const batches=[];
-    for(let i=0;i<dataRows.length;i+=BATCH) batches.push(dataRows.slice(i,i+BATCH));
+    const PLACEHOLDER_PATTERNS=/ai fills|tbd|tbc|←|->|n\/a|enter|fill|pending|\?\?\?/i;
 
-    const headerStr=headers.map((h,i)=>i+':'+String(h||'').replace(/\n/g,' ')).filter((_,i)=>i<13).join(', ');
+    const candidates=[];
+    for(let R=range.s.r;R<=range.e.r;R++){
+      if(R===headerRowIdx) continue; // skip header row itself
+      const rowArr=rows[R]||[];
+      const rowText=rowArr.join(' ').trim();
+      if(!rowText) continue; // skip blank rows
 
-    for(let b=0;b<batches.length;b++){
-      btn.innerHTML='<div class="spin-sm"></div> AI filling prices (batch '+(b+1)+'/'+batches.length+')...';
-      const batch=batches[b];
-      const batchCSV=batch.map(({excelRow,cells})=>excelRow+'|'+cells.slice(0,13).join('|')).join('\n');
+      // Get resource name = first substantial text in the row
+      const resourceName=rowArr.find(v=>{
+        const s=String(v||'').trim();
+        return s.length>2&&!PLACEHOLDER_PATTERNS.test(s)&&!/^=/.test(s);
+      });
+      if(!resourceName) continue; // skip rows without a resource name
 
-      const prompt=`Fill cloud prices for these spreadsheet rows.
+      // Skip section separator rows (row has <2 non-empty cells)
+      const nonEmpty=rowArr.filter(v=>String(v||'').trim()).length;
+      if(nonEmpty<2) continue;
 
-COLUMN POSITIONS (0-indexed): Azure price=${aC}, AWS price=${wC}, GCP price=${gC}, Cheapest=${cC}
-HEADERS: ${headerStr}
-REGION: Azure=UAE North, AWS=me-central-1, GCP=me-central1
+      // Check each price candidate column in this row
+      priceColIdxs.forEach(C=>{
+        const addr=XLSX.utils.encode_cell({r:R,c:C});
+        const cell=sheet[addr];
+        const rawVal=cell?String(cell.v||'').trim():'';
+        const isFormula=cell&&cell.f; // skip formula cells
+        if(isFormula) return;
 
-DATA (format: EXCEL_ROW|col0|col1|col2|...):
-${batchCSV}
+        const needsFilling=
+          !rawVal ||                          // empty
+          PLACEHOLDER_PATTERNS.test(rawVal) || // placeholder text
+          (isNaN(parseFloat(rawVal))&&rawVal); // non-numeric string
 
-For each row that is a cloud resource (VM, GPU, storage, DB, network, security, AI/ML):
-- Fill current approximate list prices as plain DECIMAL NUMBERS only (e.g. 0.192 not "$0.192/hr")
-- Include specific SKU/instance names
-- Identify cheapest provider
+        if(needsFilling){
+          const colHeader=String(headers[C]||'').replace(/\n/g,' ').trim();
+          const category=String(rowArr[1]||'');
+          const spec=String(rowArr[2]||'');
+          const unit=String(rowArr[3]||'');
+          candidates.push({addr,R,C,
+            resourceName:String(resourceName).trim(),
+            colHeader, category, spec, unit,
+            currentVal:rawVal
+          });
+        }
+      });
+    }
 
-Return ONLY this exact JSON structure, no extra text:
-{"updates":[{"excel_row":5,"azure_price":0.192,"azure_instance":"D4s_v5","aws_price":0.188,"aws_instance":"m6i.xlarge","gcp_price":0.190,"gcp_instance":"n2-standard-4","cheapest":"AWS"}],"summary":"done"}`;
+    if(!candidates.length){
+      throw new Error(
+        'No cells found that need pricing. '
+        +'Make sure the file has: (1) column headers mentioning Azure/AWS/GCP/Price, '
+        +'and (2) rows with empty or placeholder values in those columns.'
+      );
+    }
+
+    toast('Found '+candidates.length+' cells to fill — sending to AI...','success');
+
+    // ── 5. Ask Claude to fill prices — batch 20 at a time ─────────────────────
+    const BATCH=20;
+    const allUpdates=[];
+    const totalBatches=Math.ceil(candidates.length/BATCH);
+
+    for(let b=0;b<candidates.length;b+=BATCH){
+      const batch=candidates.slice(b,b+BATCH);
+      const batchNum=Math.floor(b/BATCH)+1;
+      btn.innerHTML='<div class="spin-sm"></div> AI filling prices ('+batchNum+'/'+totalBatches+')...';
+
+      const taskLines=batch.map((t,i)=>{
+        const parts=[
+          (i+1)+'. Cell '+t.addr,
+          'Resource: "'+t.resourceName+'"',
+          'Column: "'+t.colHeader+'"',
+        ];
+        if(t.category) parts.push('Category: '+t.category);
+        if(t.spec)     parts.push('Spec: '+t.spec);
+        if(t.unit)     parts.push('Unit: '+t.unit);
+        return parts.join(' | ');
+      }).join('\n');
+
+      const prompt=`You are a cloud pricing expert for UAE region infrastructure.
+
+Fill in current approximate prices for each cell below.
+Region context: Azure = UAE North, AWS = me-central-1 (UAE), GCP = me-central1 (Qatar/nearest to UAE)
+
+CELLS TO FILL:
+${taskLines}
+
+Rules:
+- If column is a PRICE column → return a plain decimal number only (e.g. 0.192), no $ sign, no units
+- If column says "instance" or "SKU" → return the instance name (e.g. "D4s_v5")  
+- If column says "cheapest" or "winner" → return provider name (e.g. "Azure" or "AWS" or "GCP")
+- Use HOURLY prices for compute/VM/GPU; MONTHLY per-unit for storage/database/networking
+- If a resource is not available on a provider, use 0
+
+Return ONLY valid JSON, no markdown fences:
+{"updates":[{"addr":"F5","value":0.192},{"addr":"H5","value":0.188},{"addr":"L5","value":"AWS"}]}`;
 
       try{
         const raw=await callClaude([{role:'user',content:prompt}],
-          'You fill cloud resource prices. Output ONLY valid JSON matching the exact structure shown. No markdown fences, no explanation.',
+          'You are a cloud pricing expert. Return ONLY valid JSON matching the exact structure shown. No markdown, no explanation.',
           6000);
         const result=extractJSON(raw);
-        if(result.updates&&result.updates.length) allUpdates.push(...result.updates);
+        if(result.updates) allUpdates.push(...result.updates);
       }catch(batchErr){
-        console.warn('Batch '+(b+1)+' error:',batchErr.message);
-        // Continue with next batch rather than failing entirely
-        if(b===0&&batches.length===1) throw batchErr; // only fail if single batch
+        console.warn('Batch '+batchNum+' error:',batchErr.message);
+        if(totalBatches===1) throw batchErr;
       }
     }
 
-    if(!allUpdates.length) throw new Error('AI returned no pricing data. Ensure the file has cloud resource rows with recognisable Azure/AWS/GCP price columns.');
+    if(!allUpdates.length) throw new Error('AI returned no price data. Try again.');
 
-    // ── 5. Write all prices back to the workbook ─────────────────
-    btn.innerHTML='<div class="spin-sm"></div> Writing prices to file...';
-    allUpdates.forEach(u=>{
-      const excelRow=parseInt(u.excel_row); if(!excelRow||excelRow<1) return;
-      let wrote=false;
-      const ap=parsePrice(u.azure_price); if(ap!==null&&writeNumCell(sheet,excelRow,aC,ap)){totalPriceCount++;wrote=true;}
-      if(u.azure_instance&&aI>=0) writeStrCell(sheet,excelRow,aI,u.azure_instance);
-      const wp=parsePrice(u.aws_price);   if(wp!==null&&writeNumCell(sheet,excelRow,wC,wp)) totalPriceCount++;
-      if(u.aws_instance&&wI>=0)   writeStrCell(sheet,excelRow,wI,u.aws_instance);
-      const gp=parsePrice(u.gcp_price);   if(gp!==null&&writeNumCell(sheet,excelRow,gC,gp)) totalPriceCount++;
-      if(u.gcp_instance&&gI>=0)   writeStrCell(sheet,excelRow,gI,u.gcp_instance);
-      if(u.cheapest)               writeStrCell(sheet,excelRow,cC,u.cheapest);
-      if(wrote) totalRowCount++;
+    // ── 6. Write back in-place — ONLY update cell value, touch nothing else ───
+    btn.innerHTML='<div class="spin-sm"></div> Updating spreadsheet...';
+    let updatedCount=0;
+
+    allUpdates.forEach(({addr,value})=>{
+      const cell=sheet[addr];
+      if(!cell&&(value===null||value===undefined||value==='')) return;
+
+      // Create cell if it didn't exist (was truly empty)
+      if(!cell) sheet[addr]={};
+      const c=sheet[addr];
+
+      const numVal=parseFloat(String(value).replace(/[^0-9.]/g,''));
+      if(!isNaN(numVal)&&String(value).trim()!==''&&numVal>=0){
+        // Numeric price — update value and type in-place
+        c.t='n';
+        c.v=numVal;
+      } else if(String(value||'').trim()){
+        // String value (instance name, cheapest provider, etc.)
+        c.t='s';
+        c.v=String(value).trim();
+      } else {
+        return; // skip empty/null values
+      }
+
+      // Remove cached display string and formula — keep style (s), borders, fill etc.
+      delete c.w;
+      delete c.f;
+      updatedCount++;
     });
 
-    if(totalPriceCount===0) throw new Error('Prices were generated but could not be written. The column headers may not match — add headers like "Azure Price", "AWS Price", "GCP Price".');
+    if(!updatedCount) throw new Error('Prices generated but nothing was written. Please try again.');
 
-    xlOutName=xlFile.name.replace(/\.(xlsx?|csv)$/i,'')+'_PricingUpdated.xlsx';
+    // ── 7. Download same file, original name, all formatting intact ───────────
+    xlOutName=xlFile.name.endsWith('.csv')
+      ?xlFile.name.replace(/\.csv$/i,'.xlsx')
+      :xlFile.name;
+
     document.getElementById('xl-result-body').innerHTML=
       '<div style="font-size:13px;color:var(--text2);line-height:1.8">'
-      +'Filled <strong style="color:var(--text)">'+totalPriceCount+' price cells</strong> across '
-      +'<strong style="color:var(--text)">'+totalRowCount+' resource rows</strong> '
-      +'(Azure UAE North &middot; AWS me-central-1 &middot; GCP me-central1).<br>'
-      +'<span style="font-size:11px;color:var(--text3)">Prices are approximate vendor list prices. '
-      +'Monthly cost formulas auto-calculate from these numbers.</span></div>';
+      +'&#x2705; Filled <strong style="color:var(--text)">'+updatedCount+' price cells</strong> '
+      +'across your spreadsheet (Azure UAE North &middot; AWS me-central-1 &middot; GCP me-central1).<br>'
+      +'<span style="font-size:11px;color:var(--text3)>'
+      +'All original formatting, colours, borders and formulas are preserved. '
+      +'Download below &#8212; opens in Excel exactly as before.</span></div>';
     document.getElementById('xl-result').classList.add('show');
-    toast(totalPriceCount+' prices filled across '+totalRowCount+' rows!','success');
+    toast(updatedCount+' prices filled!','success');
 
   }catch(e){ toast('Error: '+e.message); console.error('XL error:',e); }
   btn.disabled=false;
   btn.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Fill Prices with AI';
 }
 
+
 function downloadXl(){
   if(!xlWorkbook) return;
-  const wb=XLSX.write(xlWorkbook,{type:'array',bookType:'xlsx'});
+  // Write with cellStyles:true to preserve all original formatting
+  const wb=XLSX.write(xlWorkbook,{type:'array',bookType:'xlsx',cellStyles:true});
   const url=URL.createObjectURL(new Blob([wb],{type:'application/octet-stream'}));
   const a=document.createElement('a'); a.href=url; a.download=xlOutName; a.click(); URL.revokeObjectURL(url);
 }
