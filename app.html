@@ -1,1 +1,1070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloud Pricer Agent</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Fraunces:ital,opsz,wght@0,9..144,700;0,9..144,800;0,9..144,900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- SheetJS for Excel read/write entirely in the browser -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --orange:#F28D64; --violet:#6D69F0; --purple:#8F70C0; --coral:#DFA69B; --plum:#8D537C;
+  --maroon:#5E110B; --indigo:#272160; --white:#FFFFFF; --offwhite:#FAF4F5; --darkui:#171339;
+  --bg:var(--offwhite); --surface:var(--white); --surface2:#F3EEF6; --surface3:#EBE5F0;
+  --border:#DDD5ED; --border2:#C8BCDF;
+  --text:var(--indigo); --text2:#4a4270; --text3:#8c84b0;
+  --blue:var(--violet); --blue-light:rgba(109,105,240,0.06); --blue-mid:rgba(109,105,240,0.12); --blue-dark:var(--indigo);
+  --azure:#0078d4; --aws:#f59e0b; --gcp:var(--violet);
+  --green:#059669; --red:#dc2626; --amber:#d97706;
+  --gpu:#8F70C0; --gpu-light:rgba(143,112,192,0.08); --gpu-mid:rgba(143,112,192,0.18);
+  --radius:8px; --radius-lg:12px;
+  --shadow:0 1px 8px rgba(39,33,96,.07); --shadow-md:0 4px 16px rgba(39,33,96,.11);
+}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;font-size:14px}
+.app{display:flex;height:100vh}
+.sidebar{width:256px;min-width:256px;background:linear-gradient(175deg,var(--darkui) 0%,var(--indigo) 50%,#3d3895 100%);display:flex;flex-direction:column;box-shadow:2px 0 16px rgba(39,33,96,.18)}
+.sb-logo{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:10px}
+.sb-logo-icon{width:36px;height:36px;background:linear-gradient(135deg,var(--orange),var(--violet));border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 3px 10px rgba(242,141,100,.35)}
+.sb-logo-icon svg{width:18px;height:18px;fill:none;stroke:white;stroke-width:2}
+.sb-logo-text{font-family:'Fraunces',serif;font-weight:800;font-size:14px;color:white}
+.sb-logo-sub{font-size:10px;color:rgba(255,255,255,.38);margin-top:1px}
+.sb-user{padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:9px}
+.sb-av{width:28px;height:28px;background:linear-gradient(135deg,var(--orange),var(--plum));border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:white;flex-shrink:0}
+.sb-email{font-size:11px;color:rgba(255,255,255,.55);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav{padding:10px 8px;display:flex;flex-direction:column;gap:2px}
+.nav-btn{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border-radius:var(--radius);border:none;background:none;color:rgba(255,255,255,.58);font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer;transition:all .15s;text-align:left}
+.nav-btn:hover{background:rgba(255,255,255,.08);color:white}
+.nav-btn.active{background:linear-gradient(90deg,rgba(242,141,100,.22),rgba(109,105,240,.15));color:white;font-weight:600;border-left:2px solid var(--orange)}
+.nav-btn.gpu-btn:hover{background:rgba(143,112,192,.2);color:white}
+.nav-btn.gpu-btn.active{background:linear-gradient(90deg,rgba(143,112,192,.25),rgba(109,105,240,.15));color:white;border-left:2px solid var(--purple)}
+.nav-btn .nb-icon{font-size:16px;width:20px;text-align:center;flex-shrink:0}
+.nav-sep{height:1px;background:rgba(255,255,255,.08);margin:6px 8px}
+.nav-lbl{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.28);padding:4px 10px;margin-top:4px}
+.nav-gpu-badge{font-size:9px;font-weight:700;background:rgba(143,112,192,.3);color:#d4bcf5;padding:2px 6px;border-radius:99px;margin-left:auto;letter-spacing:.04em}
+.hist-list{flex:1;overflow-y:auto;padding:0 8px 8px}
+.hist-item{padding:7px 10px;border-radius:var(--radius);cursor:pointer;margin-bottom:2px;border:1px solid transparent;transition:all .15s}
+.hist-item:hover{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.1)}
+.hist-q{font-size:11px;color:rgba(255,255,255,.65);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hist-t{font-size:10px;color:rgba(255,255,255,.3);margin-top:2px}
+.no-hist{font-size:11px;color:rgba(255,255,255,.22);text-align:center;padding:12px}
+.sb-foot{padding:10px 8px;border-top:1px solid rgba(255,255,255,.08)}
+.sb-foot-btn{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border-radius:var(--radius);border:none;background:none;color:rgba(255,255,255,.35);font-family:'DM Sans',sans-serif;font-size:12px;cursor:pointer;transition:all .15s}
+.sb-foot-btn:hover{background:rgba(220,38,38,.18);color:#fca5a5}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:52px;background:var(--surface);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:10px;flex-shrink:0;box-shadow:var(--shadow)}
+.tb-title{font-family:'Fraunces',serif;font-weight:800;font-size:16px;color:var(--text);flex:1;letter-spacing:-0.3px}
+.tb-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:99px;letter-spacing:.03em}
+.badge-azure{background:#eff8ff;color:#0078d4;border:1px solid #bae6fd}
+.badge-aws{background:#fffbeb;color:#d97706;border:1px solid #fde68a}
+.badge-gcp{background:rgba(109,105,240,.08);color:var(--violet);border:1px solid rgba(109,105,240,.25)}
+.badge-gpu{background:var(--gpu-mid);color:var(--gpu);border:1px solid rgba(143,112,192,.35)}
+.page{display:none;flex:1;overflow:hidden;flex-direction:column}
+.page.active{display:flex}
+.chat-msgs{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.msg{display:flex;gap:10px;max-width:88%}
+.msg.user{align-self:flex-end;flex-direction:row-reverse}
+.msg-av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;margin-top:2px}
+.msg.user .msg-av{background:linear-gradient(135deg,var(--orange),var(--plum));color:white;font-weight:700;font-size:12px}
+.msg.ai .msg-av{background:linear-gradient(135deg,var(--offwhite),var(--surface2));border:1.5px solid var(--border2);font-size:16px}
+.msg-bubble{padding:12px 16px;border-radius:var(--radius-lg);font-size:13px;line-height:1.75;max-width:100%}
+.msg.user .msg-bubble{background:linear-gradient(135deg,var(--violet),var(--indigo));color:white;border-bottom-right-radius:4px;box-shadow:0 3px 10px rgba(109,105,240,.3)}
+.msg.ai .msg-bubble{background:var(--surface);border:1px solid var(--border);color:var(--text);border-bottom-left-radius:4px;box-shadow:var(--shadow)}
+.msg.ai .msg-bubble table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12px;border-radius:var(--radius);overflow:hidden}
+.msg.ai .msg-bubble th{background:rgba(109,105,240,.08);color:var(--violet);padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1.5px solid var(--border2)}
+.msg.ai .msg-bubble td{padding:8px 12px;border-bottom:1px solid var(--border);color:var(--text)}
+.msg.ai .msg-bubble tr:last-child td{border-bottom:none}
+.msg.ai .msg-bubble tr:hover td{background:var(--blue-light)}
+.msg.ai .msg-bubble code{font-family:'JetBrains Mono',monospace;background:var(--surface2);padding:1px 5px;border-radius:4px;font-size:11px;color:var(--violet);border:1px solid var(--border)}
+.msg.ai .msg-bubble pre{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;overflow-x:auto;margin:8px 0}
+.msg.ai .msg-bubble pre code{background:none;padding:0;border:none}
+.msg.ai .msg-bubble strong{color:var(--text);font-weight:600}
+.msg.ai .msg-bubble h3,.msg.ai .msg-bubble h4{color:var(--violet);font-size:13px;margin:10px 0 4px}
+.typing{display:flex;gap:4px;align-items:center;padding:14px 16px}
+.typing span{width:7px;height:7px;background:var(--orange);border-radius:50%;animation:bounce 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.2s}
+.typing span:nth-child(3){animation-delay:.4s}
+@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}
+.chat-input-wrap{padding:14px 20px;background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -2px 8px rgba(39,33,96,.05)}
+.chat-input-row{display:flex;gap:8px;align-items:flex-end}
+.quick-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.chip{padding:5px 12px;background:white;border:1px solid var(--border2);border-radius:99px;font-size:11px;color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap;box-shadow:0 1px 3px rgba(39,33,96,.06)}
+.chip:hover{background:rgba(242,141,100,.1);border-color:var(--orange);color:var(--indigo)}
+.chip.gpu-chip:hover{background:var(--gpu-mid);border-color:var(--purple);color:var(--purple)}
+textarea.chat-input{flex:1;padding:10px 14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-lg);font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);outline:none;resize:none;min-height:44px;max-height:150px;line-height:1.5;transition:border-color .15s}
+textarea.chat-input:focus{border-color:var(--violet);background:white;box-shadow:0 0 0 3px rgba(109,105,240,.1)}
+textarea.chat-input::placeholder{color:var(--text3)}
+.send-btn{width:44px;height:44px;background:linear-gradient(135deg,var(--orange),var(--violet));border:none;border-radius:var(--radius-lg);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s;box-shadow:0 3px 10px rgba(242,141,100,.35)}
+.send-btn:hover{background:linear-gradient(135deg,#f5a07a,#7d79f5);transform:translateY(-1px)}
+.send-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.send-btn svg{width:17px;height:17px;fill:none;stroke:white;stroke-width:2.5}
+.gpu-wrap{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.gpu-hero{background:linear-gradient(135deg,var(--indigo),var(--purple),var(--violet));border-radius:var(--radius-lg);padding:22px 24px;color:white;display:flex;align-items:center;gap:20px}
+.gpu-hero-icon{width:56px;height:56px;background:rgba(255,255,255,.15);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0}
+.gpu-hero-text h2{font-family:'Fraunces',serif;font-size:17px;font-weight:800;margin-bottom:4px}
+.gpu-hero-text p{font-size:12px;opacity:.85;line-height:1.6}
+.gpu-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.gpu-card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-lg);padding:16px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
+.gpu-card:hover{border-color:rgba(143,112,192,.5);box-shadow:0 4px 16px rgba(143,112,192,.15);transform:translateY(-1px)}
+.gpu-card.selected{border-color:var(--purple);background:var(--gpu-light);box-shadow:0 4px 16px rgba(143,112,192,.2)}
+.gpu-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--orange),var(--violet));opacity:0;transition:opacity .2s}
+.gpu-card.selected::before{opacity:1}
+.gpu-card-chip{font-size:10px;font-weight:700;background:var(--gpu-mid);color:var(--purple);padding:3px 8px;border-radius:99px;display:inline-block;margin-bottom:8px;letter-spacing:.04em}
+.gpu-card-name{font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px}
+.gpu-card-sub{font-size:11px;color:var(--text3);margin-bottom:10px;line-height:1.5}
+.gpu-card-specs{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.gpu-spec{font-size:10px;color:var(--text2)}
+.gpu-spec span{font-weight:700;color:var(--text);font-size:11px}
+.gpu-query-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow)}
+.gpu-query-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.gpu-fg{display:flex;flex-direction:column;gap:5px;flex:1;min-width:140px}
+.gpu-fg label{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em}
+.gpu-fg select,.gpu-fg input{padding:8px 11px;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius);font-family:'DM Sans',sans-serif;font-size:12px;color:var(--text);outline:none;transition:border-color .15s}
+.gpu-fg select:focus,.gpu-fg input:focus{border-color:var(--purple);box-shadow:0 0 0 3px rgba(143,112,192,.12)}
+.gpu-selected-chips{display:flex;gap:6px;flex-wrap:wrap}
+.gpu-chip-sel{display:flex;align-items:center;gap:5px;padding:4px 10px;background:var(--gpu-mid);border:1px solid rgba(143,112,192,.35);border-radius:99px;font-size:11px;color:var(--purple);font-weight:500}
+.gpu-chip-sel button{background:none;border:none;cursor:pointer;color:var(--purple);font-size:13px;line-height:1;padding:0}
+.gpu-result-table{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow)}
+.gpu-result-table table{width:100%;border-collapse:collapse;font-size:12px}
+.gpu-result-table th{background:linear-gradient(90deg,var(--surface2),var(--surface3));color:var(--purple);padding:10px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;border-bottom:1.5px solid rgba(143,112,192,.3)}
+.gpu-result-table td{padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+.gpu-result-table tr:last-child td{border-bottom:none}
+.gpu-result-table tr:hover td{background:var(--gpu-light)}
+.gpu-price-cell{display:flex;flex-direction:column;gap:2px}
+.gpu-instance{font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace}
+.gpu-price{font-weight:700;font-size:14px}
+.gpu-monthly{font-size:10px;color:var(--text3)}
+.price-azure-c{color:#0078d4}.price-aws-c{color:#d97706}.price-gcp-c{color:var(--violet)}
+.cheapest-badge{display:inline-block;padding:3px 8px;border-radius:99px;font-size:10px;font-weight:700;background:#ecfdf5;color:#059669;border:1px solid #a7f3d0}
+.gpu-summary{padding:14px 16px;background:var(--gpu-light);border-top:1px solid rgba(143,112,192,.25);font-size:12px;color:var(--text2);line-height:1.7}
+.gpu-disclaimer{padding:8px 16px;font-size:11px;color:var(--text3);font-style:italic;border-top:1px solid var(--border)}
+.avail-badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600}
+.avail-ga{background:#ecfdf5;color:#059669}.avail-preview{background:#fffbeb;color:#d97706}.avail-limited{background:#fff0f2;color:var(--maroon)}
+.compare-wrap{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.compare-config{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow)}
+.compare-config h3{font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:7px}
+.tag-input-wrap{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius);min-height:44px;cursor:text}
+.tag-input-wrap:focus-within{border-color:var(--violet);box-shadow:0 0 0 3px rgba(109,105,240,.08)}
+.service-tag{display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(109,105,240,.12);border:1px solid rgba(109,105,240,.25);border-radius:99px;font-size:12px;color:var(--violet)}
+.service-tag button{background:none;border:none;cursor:pointer;color:var(--violet);font-size:14px;padding:0;line-height:1}
+.service-tag button:hover{color:var(--red)}
+#svc-input{border:none;background:none;outline:none;font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);min-width:120px;flex:1}
+#svc-input::placeholder{color:var(--text3)}
+.compare-opts{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px}
+.fg label{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;display:block}
+.fg select,.fg input{width:100%;padding:7px 10px;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius);font-family:'DM Sans',sans-serif;font-size:12px;color:var(--text);outline:none}
+.fg select:focus,.fg input:focus{border-color:var(--violet)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:var(--radius);font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;border:none}
+.btn-primary{background:linear-gradient(135deg,var(--violet),var(--indigo));color:white;box-shadow:0 3px 8px rgba(109,105,240,.3)}
+.btn-primary:hover{background:linear-gradient(135deg,#7d79f5,#3632a0);box-shadow:0 4px 12px rgba(109,105,240,.35);transform:translateY(-1px)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-ghost{background:white;color:var(--text2);border:1px solid var(--border2)}
+.btn-ghost:hover{background:var(--blue-light);color:var(--violet)}
+.btn-gpu{background:linear-gradient(135deg,var(--purple),var(--plum));color:white;box-shadow:0 3px 8px rgba(143,112,192,.3)}
+.btn-gpu:hover{background:linear-gradient(135deg,#a07ed4,#7a4570);transform:translateY(-1px)}
+.btn-gpu:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.compare-result{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow)}
+.compare-result table{width:100%;border-collapse:collapse;font-size:12px}
+.compare-result th{background:rgba(109,105,240,.07);color:var(--violet);padding:9px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;border-bottom:1.5px solid var(--border2)}
+.compare-result td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+.compare-result tr:last-child td{border-bottom:none}
+.compare-result tr:hover td{background:var(--blue-light)}
+.provider-cell{display:flex;flex-direction:column;gap:2px}
+.provider-instance{font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace}
+.provider-price{font-weight:700;font-size:13px}
+.price-azure{color:#0078d4}.price-aws{color:#d97706}.price-gcp{color:var(--violet)}
+.cheapest-badge2{display:inline-block;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;background:#ecfdf5;color:#059669;border:1px solid #a7f3d0}
+.compare-summary{padding:14px 16px;background:var(--blue-light);border-top:1px solid var(--border2);font-size:12px;color:var(--text2);line-height:1.6}
+.compare-disclaimer{padding:8px 16px;font-size:11px;color:var(--text3);font-style:italic;border-top:1px solid var(--border)}
+.excel-wrap{flex:1;overflow-y:auto;padding:20px}
+.excel-dropzone{border:2px dashed var(--border2);border-radius:var(--radius-lg);padding:40px 20px;text-align:center;cursor:pointer;transition:all .2s;background:white;position:relative;margin-bottom:14px}
+.excel-dropzone:hover,.excel-dropzone.drag{border-color:var(--orange);background:rgba(242,141,100,.05)}
+.excel-dropzone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.excel-icon{font-size:40px;margin-bottom:10px}
+.excel-title{font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px}
+.excel-hint{font-size:12px;color:var(--text3);line-height:1.6}
+.excel-fp{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 16px;display:none;align-items:center;gap:12px;margin-bottom:14px}
+.excel-fp.show{display:flex}
+.excel-info{flex:1;min-width:0}
+.excel-name{font-weight:600;font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.excel-size{font-size:11px;color:var(--text3);margin-top:2px}
+.excel-rm{background:none;border:none;cursor:pointer;color:var(--text3);font-size:16px;padding:4px;border-radius:4px}
+.excel-rm:hover{background:#fff0f2;color:var(--red)}
+.excel-result{background:white;border:1.5px solid #a7f3d0;border-radius:var(--radius-lg);padding:16px;display:none}
+.excel-result.show{display:block}
+.excel-result-title{font-weight:700;color:var(--green);display:flex;align-items:center;gap:7px;margin-bottom:10px}
+.settings-wrap{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow)}
+.card-hdr{padding:12px 16px;border-bottom:1px solid var(--border);background:var(--surface2);display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px;color:var(--text)}
+.card-body{padding:16px}
+.fi{width:100%;padding:9px 11px;background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius);font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);outline:none;transition:border-color .15s}
+.fi:focus{border-color:var(--violet);box-shadow:0 0 0 3px rgba(109,105,240,.1);background:white}
+.fi::placeholder{color:var(--text3)}
+.fl{display:block;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--surface2)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+.spin-sm{width:13px;height:13px;border:2px solid rgba(255,255,255,.4);border-top-color:white;border-radius:50%;animation:sp .6s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+.info-banner{background:rgba(109,105,240,.06);border:1px solid var(--border2);border-left:3px solid var(--orange);border-radius:var(--radius-lg);padding:12px 16px;font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:14px}
+.info-banner strong{color:var(--text);font-weight:700}
+.api-warning{background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--radius-lg);padding:12px 16px;font-size:12px;color:#92400e;display:none;margin-bottom:12px}
+</style>
+</head>
+<body>
 
+<!-- ══ API KEY FIRST-RUN OVERLAY ══ -->
+<div id="apiOverlay" style="display:none;position:fixed;inset:0;background:rgba(23,19,57,.92);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px)">
+  <div style="background:white;border-radius:16px;padding:36px 32px;max-width:420px;width:calc(100% - 32px);box-shadow:0 24px 60px rgba(0,0,0,.4)">
+    <div style="width:52px;height:52px;background:linear-gradient(135deg,#F28D64,#6D69F0);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;box-shadow:0 6px 20px rgba(109,105,240,.3)">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+    </div>
+    <div style="font-family:'Fraunces',serif;font-size:22px;font-weight:900;color:#272160;text-align:center;margin-bottom:6px">Add your Anthropic API Key</div>
+    <div style="font-size:13px;color:#8c84b0;text-align:center;margin-bottom:22px;line-height:1.6">Cloud Pricer uses Claude AI to look up real-time cloud pricing. Your key is stored only in your browser — never on any server.</div>
+    <div style="margin-bottom:6px">
+      <label style="display:block;font-size:11px;font-weight:700;color:#7e78a8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Anthropic API Key</label>
+      <input id="overlayKey" type="password" placeholder="sk-ant-api03-..."
+        style="width:100%;padding:11px 14px;background:#FAF4F5;border:1.5px solid #e3ddf0;border-radius:10px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#272160;outline:none;transition:border-color .2s"
+        onfocus="this.style.borderColor='#6D69F0'" onblur="this.style.borderColor='#e3ddf0'"
+        onkeydown="if(event.key==='Enter')saveOverlayKey()">
+    </div>
+    <div style="font-size:11px;color:#8c84b0;margin-bottom:18px">
+      Get your key at <a href="https://console.anthropic.com" target="_blank" style="color:#6D69F0;font-weight:600">console.anthropic.com</a> → API Keys
+    </div>
+    <button onclick="saveOverlayKey()" style="width:100%;padding:12px;background:linear-gradient(135deg,#6D69F0,#272160);color:white;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(109,105,240,.35)">
+      Save &amp; Start Using Cloud Pricer →
+    </button>
+    <div id="overlayErr" style="font-size:12px;color:#dc2626;text-align:center;margin-top:10px;min-height:18px"></div>
+  </div>
+</div>
+
+<div class="app">
+<aside class="sidebar">
+  <div class="sb-logo">
+    <div class="sb-logo-icon"><svg viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg></div>
+    <div><div class="sb-logo-text">Cloud Pricer</div><div class="sb-logo-sub">Azure · AWS · GCP</div></div>
+  </div>
+  <div class="sb-user">
+    <div class="sb-av" id="sbAv">?</div>
+    <div class="sb-email" id="sbEmail">Loading...</div>
+  </div>
+  <div class="nav">
+    <button class="nav-btn active" id="nav-chat" onclick="goPage('chat')"><span class="nb-icon">💬</span> Price Query Chat</button>
+    <button class="nav-btn gpu-btn" id="nav-gpu" onclick="goPage('gpu')"><span class="nb-icon">⚡</span> GPU Nodes <span class="nav-gpu-badge">NEW</span></button>
+    <button class="nav-btn" id="nav-compare" onclick="goPage('compare')"><span class="nb-icon">⚖️</span> Compare Providers</button>
+    <button class="nav-btn" id="nav-excel" onclick="goPage('excel')"><span class="nb-icon">📊</span> Update Excel Prices</button>
+    <div class="nav-sep"></div>
+    <button class="nav-btn" id="nav-settings" onclick="goPage('settings')"><span class="nb-icon">⚙️</span> Settings</button>
+  </div>
+  <div class="nav-lbl">Recent Queries</div>
+  <div class="hist-list" id="hist-list"><div class="no-hist">No queries yet</div></div>
+  <div class="sb-foot">
+    <button class="sb-foot-btn" onclick="logout()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      Sign out
+    </button>
+  </div>
+</aside>
+
+<main class="main">
+  <!-- CHAT PAGE -->
+  <div class="page active" id="page-chat">
+    <div class="topbar">
+      <div class="tb-title">Cloud Price Query</div>
+      <span class="tb-badge badge-azure">Azure</span>
+      <span class="tb-badge badge-aws">AWS</span>
+      <span class="tb-badge badge-gcp">GCP</span>
+      <button class="btn btn-ghost" style="margin-left:8px;font-size:12px;padding:5px 11px" onclick="clearChat()">New chat</button>
+    </div>
+    <div class="api-warning" id="apiWarn">
+      ⚠️ <strong>API key required.</strong> <a href="#" onclick="document.getElementById('apiOverlay').style.display='flex';return false" style="color:#92400e;font-weight:700">Click here to add your Anthropic API key →</a>
+    </div>
+    <div class="chat-msgs" id="chat-msgs">
+      <div class="msg ai">
+        <div class="msg-av">☁️</div>
+        <div class="msg-bubble">
+          <strong>Cloud Pricer is ready!</strong> Ask me anything about cloud pricing across Azure, AWS, and GCP. For example:<br><br>
+          • <em>"Compare 8 vCPU 32GB VM pricing across all three providers"</em><br>
+          • <em>"What's the cost of H200 GPU nodes on Azure and AWS?"</em><br>
+          • <em>"Compare managed SQL database pricing for 4 vCPU"</em><br>
+          • <em>"How much does Azure Sentinel cost vs AWS Security Lake per GB?"</em><br>
+          • <em>"Give me storage pricing for hot, cool, and archive tiers"</em><br>
+          • <em>"What are reserved instance savings for compute on each cloud?"</em>
+        </div>
+      </div>
+    </div>
+    <div class="chat-input-wrap">
+      <div class="quick-chips">
+        <div class="chip" onclick="sendChip(this)">🖥️ Compute pricing</div>
+        <div class="chip" onclick="sendChip(this)">💾 Storage tiers</div>
+        <div class="chip" onclick="sendChip(this)">🌐 Networking egress</div>
+        <div class="chip gpu-chip" onclick="sendChip(this)">⚡ H200 GPU nodes</div>
+        <div class="chip" onclick="sendChip(this)">🗄️ Managed databases</div>
+        <div class="chip" onclick="sendChip(this)">🔒 Security services</div>
+        <div class="chip" onclick="sendChip(this)">💡 Reserved vs on-demand</div>
+        <div class="chip" onclick="sendChip(this)">🤖 AI/ML services</div>
+      </div>
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="chat-input" placeholder="Ask about any cloud resource pricing — compute, storage, networking, GPU, PaaS, AI/ML..." rows="1" onkeydown="onKey(event)" oninput="autoGrow(this)"></textarea>
+        <button class="send-btn" id="send-btn" onclick="sendMessage()">
+          <svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GPU NODES PAGE -->
+  <div class="page" id="page-gpu">
+    <div class="topbar">
+      <div class="tb-title">GPU Node Pricing</div>
+      <span class="tb-badge badge-azure">Azure</span>
+      <span class="tb-badge badge-aws">AWS</span>
+      <span class="tb-badge badge-gcp">GCP</span>
+      <span class="tb-badge badge-gpu">GPU Nodes</span>
+    </div>
+    <div class="gpu-wrap">
+      <div class="gpu-hero">
+        <div class="gpu-hero-icon">⚡</div>
+        <div class="gpu-hero-text">
+          <h2>GPU Node Pricing Intelligence</h2>
+          <p>Compare H100, H200, A100, V100 and other GPU nodes across Azure, AWS and GCP.<br>Select GPU types below and click Compare to get live pricing across all providers.</p>
+        </div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Select GPU types to compare</div>
+      <div class="gpu-grid" id="gpu-card-grid"></div>
+      <div class="gpu-query-bar">
+        <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:4px">Selected GPUs: <span id="gpu-selected-count" style="color:var(--gpu)">none</span></div>
+        <div class="gpu-selected-chips" id="gpu-selected-chips"></div>
+        <div class="gpu-query-row">
+          <div class="gpu-fg"><label>Region</label>
+            <select id="gpu-region">
+              <option>US East (Virginia)</option><option>US West (Oregon)</option>
+              <option>Europe West (Netherlands)</option><option>UAE North (Dubai)</option>
+              <option>Asia Pacific (Singapore)</option><option>Asia Pacific (Tokyo)</option>
+            </select></div>
+          <div class="gpu-fg"><label>Duration basis</label>
+            <select id="gpu-duration"><option>Hourly</option><option selected>Monthly (730 hours)</option><option>Annual</option></select></div>
+          <div class="gpu-fg"><label>Commitment</label>
+            <select id="gpu-commit"><option>On-demand</option><option>1-year reserved</option><option>3-year reserved</option><option>Spot / Preemptible</option></select></div>
+          <div class="gpu-fg" style="min-width:unset;flex:none"><label>&nbsp;</label>
+            <button class="btn btn-gpu" id="gpu-cmp-btn" onclick="runGpuCompare()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Compare GPUs
+            </button></div>
+        </div>
+      </div>
+      <div id="gpu-result" style="display:none">
+        <div class="gpu-result-table" id="gpu-result-table"></div>
+      </div>
+      <div style="background:var(--gpu-light);border:1px solid #c4b5fd;border-radius:var(--radius-lg);padding:14px 16px;display:flex;align-items:center;gap:14px">
+        <div style="font-size:24px">💬</div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:2px">Need a custom GPU query?</div>
+          <div style="font-size:12px;color:var(--text2)">Ask the AI chat for specific configurations, multi-node clusters, reserved pricing, or spot/preemptible discounts.</div></div>
+        <button class="btn btn-gpu" onclick="goPage('chat');document.getElementById('chat-input').value='Compare H100 and H200 GPU node pricing across Azure, AWS and GCP including spot pricing';document.getElementById('chat-input').focus()">Ask AI Chat →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPARE PAGE -->
+  <div class="page" id="page-compare">
+    <div class="topbar"><div class="tb-title">Provider Pricing Comparison</div></div>
+    <div class="compare-wrap">
+      <div class="compare-config">
+        <h3>⚖️ Configure Comparison</h3>
+        <label class="fl">Services to compare (type and press Enter)</label>
+        <div class="tag-input-wrap" id="tag-wrap" onclick="document.getElementById('svc-input').focus()">
+          <input id="svc-input" placeholder="e.g. 4 vCPU 16GB VM, Managed SQL, Object Storage..." onkeydown="addTag(event)">
+        </div>
+        <div class="compare-opts">
+          <div class="fg"><label>Region</label>
+            <select id="cmp-region"><option>US East (Virginia)</option><option>US West (Oregon)</option><option>Europe West (Netherlands)</option><option>UAE North (Dubai)</option><option>Asia Pacific (Singapore)</option><option>Asia Pacific (Tokyo)</option></select></div>
+          <div class="fg"><label>Duration Basis</label>
+            <select id="cmp-duration"><option>Monthly (730 hours)</option><option>Hourly</option><option>Annual</option></select></div>
+          <div class="fg"><label>Commitment</label>
+            <select id="cmp-commit"><option>On-demand (no commitment)</option><option>1-year reserved / committed</option><option>3-year reserved / committed</option><option>Spot / Preemptible</option></select></div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" id="cmp-btn" onclick="runCompare()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Compare Now
+          </button>
+          <button class="btn btn-ghost" onclick="addPreset('compute')">+ Compute</button>
+          <button class="btn btn-ghost" onclick="addPreset('storage')">+ Storage</button>
+          <button class="btn btn-ghost" style="border-color:#c4b5fd;color:var(--gpu)" onclick="addPreset('gpu')">⚡ GPU preset</button>
+          <button class="btn btn-ghost" onclick="addPreset('database')">+ Database</button>
+        </div>
+      </div>
+      <div id="cmp-result" style="display:none"><div class="compare-result" id="cmp-table"></div></div>
+    </div>
+  </div>
+
+  <!-- EXCEL PAGE -->
+  <div class="page" id="page-excel">
+    <div class="topbar"><div class="tb-title">Update Excel with Cloud Pricing</div></div>
+    <div class="excel-wrap">
+      <div class="info-banner">
+        <strong>How it works:</strong> Upload your pricing spreadsheet (.xlsx or .csv). The AI reads every row, identifies cloud resources with missing or outdated pricing, and fills in current Azure, AWS, and GCP prices. Download the updated file instantly — all processing happens in your browser.
+      </div>
+      <div class="excel-dropzone" id="xl-zone">
+        <input type="file" id="xl-file" accept=".xlsx,.xls,.csv" onchange="onXlFile(this)">
+        <div class="excel-icon">📊</div>
+        <div class="excel-title">Drop your pricing spreadsheet here</div>
+        <div class="excel-hint">Supports .xlsx, .xls, .csv · AI will identify resources and fill in current cloud prices</div>
+      </div>
+      <div class="excel-fp" id="xl-fp">
+        <div style="font-size:24px">📊</div>
+        <div class="excel-info"><div class="excel-name" id="xl-fname">—</div><div class="excel-size" id="xl-fsize">—</div></div>
+        <button class="excel-rm" onclick="clearXl()">✕</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <button class="btn btn-primary" id="xl-btn" onclick="runXlUpdate()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>Fill Prices with AI
+        </button>
+        <button class="btn btn-ghost" onclick="downloadTemplate()">📥 Download template</button>
+      </div>
+      <div class="excel-result" id="xl-result">
+        <div class="excel-result-title">✅ Prices Updated Successfully</div>
+        <div id="xl-result-body"></div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="downloadXl()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download Updated Spreadsheet
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS PAGE -->
+  <div class="page" id="page-settings">
+    <div class="topbar"><div class="tb-title">Settings</div></div>
+    <div class="settings-wrap">
+      <div class="card">
+        <div class="card-hdr">🔑 Anthropic API Key</div>
+        <div class="card-body">
+          <div style="margin-bottom:10px"><label class="fl">API Key</label>
+            <input class="fi" id="s-apikey" type="password" placeholder="sk-ant-api03-..." style="font-family:'JetBrains Mono',monospace" oninput="autoSaveApiKey(this.value)"></div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:12px">Stored locally in your browser only — never sent to any server. Get a key at <a href="https://console.anthropic.com" target="_blank" style="color:var(--blue)">console.anthropic.com</a></div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save API Key</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr">👤 Profile</div>
+        <div class="card-body">
+          <div style="margin-bottom:12px"><label class="fl">Name</label><input class="fi" id="s-name" placeholder="Your name"></div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Profile</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr">🗑️ Data Management</div>
+        <div class="card-body">
+          <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Clear all locally stored chat history and settings from this browser.</div>
+          <button class="btn btn-ghost" style="color:var(--red);border-color:#fecaca" onclick="clearAllData()">Clear All Data</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</div>
+
+<script>
+// ── Constants ──────────────────────────────────────────────────────────────────
+const SESSION_KEY  = 'cp_session';
+const USERS_KEY    = 'cp_users';
+const SETTINGS_KEY = 'cp_settings';
+const HISTORY_KEY  = 'cp_history';
+
+// ── GPU catalogue ──────────────────────────────────────────────────────────────
+const GPU_CATALOGUE = [
+  { id:'h200-8x', chip:'H200 SXM5', name:'H200 Node (8× GPU)', sub:'Latest-gen HBM3e · 141GB/GPU · 1.6TB/s bandwidth', specs:{vRAM:'8×141GB=1128GB',NVLink:'NVLink 4.0',FP8:'16 PFLOPS',FP16:'8 PFLOPS'}, avail:'preview' },
+  { id:'h100-8x', chip:'H100 SXM5', name:'H100 Node (8× GPU)', sub:'Industry-standard AI training · 80GB/GPU · NVLink 4.0', specs:{vRAM:'8×80GB=640GB',NVLink:'NVLink 4.0',FP8:'8 PFLOPS',FP16:'4 PFLOPS'}, avail:'ga' },
+  { id:'a100-8x', chip:'A100 SXM4', name:'A100 Node (8× GPU)', sub:'Production AI/HPC · 80GB/GPU · PCIe or SXM', specs:{vRAM:'8×80GB=640GB',NVLink:'NVLink 3.0',FP16:'2.5 PFLOPS',TF32:'5 PFLOPS'}, avail:'ga' },
+  { id:'a100-1x', chip:'A100 40GB', name:'A100 Single GPU', sub:'Single-GPU inference & fine-tuning · 40GB vRAM', specs:{vRAM:'40GB HBM2e',NVLink:'PCIe',FP16:'312 TFLOPS',TF32:'156 TFLOPS'}, avail:'ga' },
+  { id:'v100-1x', chip:'V100', name:'V100 Single GPU', sub:'Mature AI/ML workloads · 16/32GB · Cost-effective', specs:{vRAM:'16–32GB HBM2',NVLink:'NVLink 2.0',FP16:'125 TFLOPS',TF32:'N/A'}, avail:'ga' },
+  { id:'l40s-1x', chip:'L40S', name:'L40S Single GPU', sub:'Inference-optimised · 48GB GDDR6 · Low-latency', specs:{vRAM:'48GB GDDR6',Interface:'PCIe 4.0',FP8:'724 TFLOPS',FP16:'362 TFLOPS'}, avail:'ga' },
+];
+
+// ── App state ──────────────────────────────────────────────────────────────────
+let currentUser = null;
+let selectedGpus = new Set();
+let chatHistory = [], cmpServices = [], xlFile = null, xlWorkbook = null, xlOutName = '';
+
+// ── Auth check — redirect to auth.html if not logged in ───────────────────────
+function checkAuth() {
+  try {
+    const sess = localStorage.getItem(SESSION_KEY);
+    if (!sess) { location.replace('auth.html'); return false; }
+    currentUser = JSON.parse(sess);
+    if (!currentUser || !currentUser.email) { location.replace('auth.html'); return false; }
+    return true;
+  } catch(e) { location.replace('auth.html'); return false; }
+}
+
+// ── Settings helpers ───────────────────────────────────────────────────────────
+function getSettings() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch(e) { return {}; }
+}
+function getApiKey() { return getSettings().apiKey || ''; }
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+function init() {
+  if (!checkAuth()) return;
+
+  // Populate user info in sidebar
+  document.getElementById('sbEmail').textContent = currentUser.email;
+  document.getElementById('sbAv').textContent = currentUser.email.charAt(0).toUpperCase();
+
+  // Restore settings
+  const s = getSettings();
+  if (s.apiKey) document.getElementById('s-apikey').value = s.apiKey;
+  if (s.name || currentUser.name) document.getElementById('s-name').value = s.name || currentUser.name || '';
+
+  // Show API key warning if missing
+  if (!s.apiKey) {
+    document.getElementById('apiWarn').style.display = 'block';
+  }
+
+  loadHistory();
+  renderGpuCards();
+}
+
+// ── Navigation ─────────────────────────────────────────────────────────────────
+function goPage(p) {
+  ['chat','gpu','compare','excel','settings'].forEach(x => {
+    document.getElementById('page-'+x).classList.remove('active');
+    const n = document.getElementById('nav-'+x);
+    if (n) n.classList.remove('active');
+  });
+  document.getElementById('page-'+p).classList.add('active');
+  const nb = document.getElementById('nav-'+p);
+  if (nb) nb.classList.add('active');
+}
+
+// ── Anthropic API call (direct from browser) ───────────────────────────────────
+async function callClaude(messages, systemPrompt, maxTokens = 1500) {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('API key not set — go to ⚙️ Settings and add your Anthropic API key (sk-ant-...).');
+
+  let resp;
+  try {
+    resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: messages
+      })
+    });
+  } catch(netErr) {
+    throw new Error('Network error — check your internet connection and try again. (' + netErr.message + ')');
+  }
+
+  // Read raw text first so we can diagnose non-JSON responses
+  const rawText = await resp.text();
+
+  // If response is HTML (e.g. Cloudflare error page), give a clear message
+  if (rawText.trim().startsWith('<')) {
+    if (resp.status === 401 || resp.status === 403) throw new Error('Invalid API key. Go to ⚙️ Settings and paste your Anthropic API key.');
+    if (resp.status === 429) throw new Error('Rate limit hit — wait a moment and try again.');
+    if (resp.status >= 500) throw new Error('Anthropic API is temporarily unavailable (HTTP ' + resp.status + '). Try again in a moment.');
+    throw new Error('Unexpected response from API (HTTP ' + resp.status + '). Check your API key in ⚙️ Settings.');
+  }
+
+  let data;
+  try { data = JSON.parse(rawText); }
+  catch(e) { throw new Error('Could not parse API response. Raw: ' + rawText.slice(0, 120)); }
+
+  if (data.error) {
+    const msg = data.error.message || JSON.stringify(data.error);
+    if (msg.includes('api_key') || msg.includes('authentication')) throw new Error('Invalid API key — go to ⚙️ Settings and check your key.');
+    throw new Error(msg);
+  }
+  return (data.content || []).map(b => b.text || '').join('');
+}
+
+// ── Robustly extract JSON from Claude response (handles markdown fences) ────────
+function extractJSON(raw) {
+  if (!raw || !raw.trim()) throw new Error('Empty response from AI.');
+  // Strip markdown fences: ```json ... ``` or ``` ... ```
+  let clean = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  // Find first { and last } to extract JSON object
+  const first = clean.indexOf('{');
+  const last  = clean.lastIndexOf('}');
+  if (first === -1 || last === -1) throw new Error('AI did not return the expected JSON format. Try again.');
+  clean = clean.slice(first, last + 1);
+  try { return JSON.parse(clean); }
+  catch(e) { throw new Error('Could not parse AI response as JSON. Try again.'); }
+}
+
+// ── Chat ───────────────────────────────────────────────────────────────────────
+const CHAT_SYSTEM = `You are Cloud Pricer, an expert AI assistant specialising in cloud infrastructure pricing across Microsoft Azure, Amazon Web Services (AWS), and Google Cloud Platform (GCP).
+
+Your role is to provide accurate, current, and detailed cloud pricing information. When asked about pricing, always:
+1. Compare all three providers (Azure, AWS, GCP) unless a specific provider is requested
+2. Include specific instance types/SKUs (e.g., Azure D4s_v5, AWS m6i.xlarge, GCP n2-standard-4)
+3. Show both hourly and monthly costs where relevant
+4. Note reserved instance discounts when applicable
+5. Highlight which provider is cheapest for the given configuration
+6. Include region context (prices vary by region — default to US East unless specified)
+7. Add a brief disclaimer that prices change frequently
+
+Format responses clearly with tables where comparing multiple options. Use markdown formatting.
+Keep responses concise but comprehensive. Always give concrete numbers, not vague ranges.`;
+
+function clearChat() {
+  chatHistory = [];
+  document.getElementById('chat-msgs').innerHTML = `
+    <div class="msg ai"><div class="msg-av">☁️</div><div class="msg-bubble">
+    New conversation started. Ask me anything about Azure, AWS, or GCP pricing!</div></div>`;
+}
+
+function appendMsg(role, content) {
+  const wrap = document.getElementById('chat-msgs');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  const av = role === 'user'
+    ? `<div class="msg-av">${document.getElementById('sbAv').textContent}</div>`
+    : '<div class="msg-av">☁️</div>';
+  div.innerHTML = av + `<div class="msg-bubble">${formatMsg(content)}</div>`;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+function showTyping() {
+  const wrap = document.getElementById('chat-msgs');
+  const div = document.createElement('div');
+  div.className = 'msg ai'; div.id = 'typing-indicator';
+  div.innerHTML = '<div class="msg-av">☁️</div><div class="msg-bubble"><div class="typing"><span></span><span></span><span></span></div></div>';
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+function hideTyping() { const el = document.getElementById('typing-indicator'); if (el) el.remove(); }
+
+function formatMsg(text) {
+  text = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  text = text.replace(/^\|(.+)\|$/gm, row => {
+    const cells = row.split('|').filter((_,i,a) => i>0 && i<a.length-1);
+    return '<tr>' + cells.map(c => `<td>${c.trim()}</td>`).join('') + '</tr>';
+  });
+  text = text.replace(/(<tr>.*<\/tr>\n?)+/gs, m => `<table>${m}</table>`);
+  text = text.replace(/<table>(<tr><td>.*?<\/td><\/tr>)/s, (m, hdr) => {
+    const thRow = hdr.replace(/<td>/g,'<th>').replace(/<\/td>/g,'</th>');
+    return '<table>' + thRow;
+  });
+  text = text.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  text = text.replace(/`([^`]+)`/g,'<code>$1</code>');
+  text = text.replace(/^### (.+)$/gm,'<h4>$1</h4>');
+  text = text.replace(/^## (.+)$/gm,'<h3>$1</h3>');
+  text = text.replace(/^[•\-\*] (.+)$/gm,'<li>$1</li>');
+  text = text.replace(/(<li>.*<\/li>\n?)+/gs, m => '<ul style="margin:6px 0;padding-left:18px">'+m+'</ul>');
+  text = text.replace(/\n\n/g,'<br><br>').replace(/\n/g,'<br>');
+  return text;
+}
+
+async function sendMessage() {
+  const inp = document.getElementById('chat-input');
+  const msg = inp.value.trim();
+  if (!msg) return;
+  inp.value = ''; inp.style.height = '';
+  appendMsg('user', msg);
+  chatHistory.push({ role: 'user', content: msg });
+  document.getElementById('send-btn').disabled = true;
+  showTyping();
+  try {
+    const reply = await callClaude(chatHistory.slice(-12), CHAT_SYSTEM, 1500);
+    hideTyping();
+    appendMsg('ai', reply);
+    chatHistory.push({ role: 'assistant', content: reply });
+    saveToHistory(msg);
+  } catch(e) {
+    hideTyping();
+    appendMsg('ai', '⚠️ Error: ' + e.message);
+  }
+  document.getElementById('send-btn').disabled = false;
+  document.getElementById('chat-input').focus();
+}
+
+function sendChip(el) { document.getElementById('chat-input').value = el.textContent.replace(/^[^\w\s]+/,'').trim(); sendMessage(); }
+function onKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
+function autoGrow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 150) + 'px'; }
+function replayChat(q) { document.getElementById('chat-input').value = q; goPage('chat'); document.getElementById('chat-input').focus(); }
+
+// ── History (localStorage) ─────────────────────────────────────────────────────
+function saveToHistory(question) {
+  try {
+    const key = HISTORY_KEY + '_' + currentUser.id;
+    let hist = JSON.parse(localStorage.getItem(key) || '[]');
+    hist.unshift({ question, created_at: new Date().toISOString() });
+    hist = hist.slice(0, 50);
+    localStorage.setItem(key, JSON.stringify(hist));
+    loadHistory();
+  } catch(e) {}
+}
+function loadHistory() {
+  try {
+    const key = HISTORY_KEY + '_' + currentUser.id;
+    const chats = JSON.parse(localStorage.getItem(key) || '[]');
+    const list = document.getElementById('hist-list');
+    if (!chats.length) { list.innerHTML = '<div class="no-hist">No queries yet</div>'; return; }
+    list.innerHTML = chats.map(c => `
+      <div class="hist-item" onclick="replayChat('${escAttr(c.question)}')">
+        <div class="hist-q">${esc(c.question)}</div>
+        <div class="hist-t">${new Date(c.created_at).toLocaleDateString()}</div>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+// ── GPU Nodes ──────────────────────────────────────────────────────────────────
+function renderGpuCards() {
+  const grid = document.getElementById('gpu-card-grid');
+  const availLabel = { ga:'Generally Available', preview:'Preview / Limited', limited:'Limited Regions' };
+  const availClass = { ga:'avail-ga', preview:'avail-preview', limited:'avail-limited' };
+  grid.innerHTML = GPU_CATALOGUE.map(g => `
+    <div class="gpu-card" id="gc-${g.id}" onclick="toggleGpu('${g.id}')">
+      <div class="gpu-card-chip">${g.chip}</div>
+      <div class="gpu-card-name">${g.name}</div>
+      <div class="gpu-card-sub">${g.sub}</div>
+      <div class="gpu-card-specs">${Object.entries(g.specs).map(([k,v]) => `<div class="gpu-spec">${k}: <span>${v}</span></div>`).join('')}</div>
+      <div style="margin-top:10px"><span class="avail-badge ${availClass[g.avail]}">${availLabel[g.avail]}</span></div>
+    </div>`).join('');
+}
+function toggleGpu(id) {
+  if (selectedGpus.has(id)) selectedGpus.delete(id); else selectedGpus.add(id);
+  GPU_CATALOGUE.forEach(g => { const card = document.getElementById('gc-'+g.id); if (card) card.classList.toggle('selected', selectedGpus.has(g.id)); });
+  renderGpuSelected();
+}
+function renderGpuSelected() {
+  const chips = document.getElementById('gpu-selected-chips');
+  const count = document.getElementById('gpu-selected-count');
+  count.textContent = selectedGpus.size ? [...selectedGpus].map(id => GPU_CATALOGUE.find(g => g.id===id)?.name||id).join(', ') : 'none';
+  chips.innerHTML = [...selectedGpus].map(id => {
+    const g = GPU_CATALOGUE.find(x => x.id===id);
+    return g ? `<div class="gpu-chip-sel">${g.chip}<button onclick="toggleGpu('${id}')">×</button></div>` : '';
+  }).join('');
+}
+
+const COMPARE_SYSTEM = `You are a cloud pricing expert. When asked to compare cloud services across Azure, AWS, and GCP, respond ONLY with valid JSON in this exact format:
+{"rows":[{"service":"Service Name","azure":{"instance":"SKU","price":"$X.XX/hr","monthly":"$X,XXX/mo"},"aws":{"instance":"SKU","price":"$X.XX/hr","monthly":"$X,XXX/mo"},"gcp":{"instance":"SKU","price":"$X.XX/hr","monthly":"$X,XXX/mo"},"cheapest":"Azure|AWS|GCP","notes":"brief note"}],"summary":"one sentence summary","disclaimer":"prices as of [current period], verify at provider websites"}
+Use null for unavailable options. Always include all three providers. No markdown, no explanation, just JSON.`;
+
+async function runGpuCompare() {
+  if (!selectedGpus.size) { toast('Select at least one GPU type to compare'); return; }
+  const btn = document.getElementById('gpu-cmp-btn');
+  btn.disabled = true; btn.innerHTML = '<div class="spin-sm"></div> Comparing...';
+  const services = [...selectedGpus].map(id => GPU_CATALOGUE.find(g => g.id===id)?.name||id);
+  try {
+    const prompt = `Compare pricing for these GPU nodes: ${services.join(', ')}. Region: ${document.getElementById('gpu-region').value}. Duration: ${document.getElementById('gpu-duration').value}. Commitment: ${document.getElementById('gpu-commit').value}.`;
+    const raw = await callClaude([{ role:'user', content: prompt }], COMPARE_SYSTEM, 1500);
+    const d = extractJSON(raw);
+    renderGpuResult(d);
+  } catch(e) { toast('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Compare GPUs';
+}
+
+function renderGpuResult(d) {
+  const el = document.getElementById('gpu-result'), tbl = document.getElementById('gpu-result-table');
+  el.style.display = 'block';
+  let html = `<table><thead><tr><th>GPU Node</th><th style="color:#0078d4">☁ Azure</th><th style="color:#d97706">⬡ AWS</th><th style="color:var(--violet)">⬢ GCP</th><th>Cheapest</th><th>Notes</th></tr></thead><tbody>`;
+  (d.rows||[]).forEach(r => {
+    html += `<tr>
+      <td style="font-weight:600;color:var(--text)">${esc(r.service)}</td>
+      <td><div class="gpu-price-cell"><span class="gpu-instance">${esc(r.azure?.instance||'')}</span><span class="gpu-price price-azure-c">${esc(r.azure?.price||'—')}</span><span class="gpu-monthly">${esc(r.azure?.monthly||'')}</span></div></td>
+      <td><div class="gpu-price-cell"><span class="gpu-instance">${esc(r.aws?.instance||'')}</span><span class="gpu-price price-aws-c">${esc(r.aws?.price||'—')}</span><span class="gpu-monthly">${esc(r.aws?.monthly||'')}</span></div></td>
+      <td><div class="gpu-price-cell"><span class="gpu-instance">${esc(r.gcp?.instance||'')}</span><span class="gpu-price price-gcp-c">${esc(r.gcp?.price||'—')}</span><span class="gpu-monthly">${esc(r.gcp?.monthly||'')}</span></div></td>
+      <td><span class="cheapest-badge">${esc(r.cheapest||'—')}</span></td>
+      <td style="font-size:11px;color:var(--text3);max-width:200px">${esc(r.notes||'')}</td></tr>`;
+  });
+  html += '</tbody></table>';
+  if (d.summary) html += `<div class="gpu-summary"><strong style="color:var(--text)">Summary:</strong> ${esc(d.summary)}</div>`;
+  if (d.disclaimer) html += `<div class="gpu-disclaimer">${esc(d.disclaimer)}</div>`;
+  tbl.innerHTML = html;
+  el.scrollIntoView({ behavior:'smooth' });
+}
+
+// ── Compare ────────────────────────────────────────────────────────────────────
+function addTag(e) {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault();
+    const v = e.target.value.trim();
+    if (!v || cmpServices.includes(v)) return;
+    cmpServices.push(v); renderTags(); e.target.value = '';
+  }
+}
+function removeTag(i) { cmpServices.splice(i, 1); renderTags(); }
+function renderTags() {
+  const wrap = document.getElementById('tag-wrap'), inp = document.getElementById('svc-input');
+  wrap.querySelectorAll('.service-tag').forEach(t => t.remove());
+  cmpServices.forEach((s, i) => {
+    const t = document.createElement('div'); t.className = 'service-tag';
+    t.innerHTML = `${esc(s)}<button onclick="removeTag(${i})">×</button>`;
+    wrap.insertBefore(t, inp);
+  });
+}
+function addPreset(type) {
+  const presets = {
+    compute:['4 vCPU 16GB general VM','8 vCPU 32GB compute VM','16 vCPU 64GB memory VM'],
+    storage:['SSD block storage 1TB','Object storage 1TB','Archive storage 1TB'],
+    gpu:['A100 GPU (1x)','H100 GPU (8x)','H200 GPU (8x)'],
+    database:['Managed SQL 4 vCPU','Redis cache','NoSQL/Document DB'],
+  };
+  (presets[type]||[]).forEach(s => { if (!cmpServices.includes(s)) cmpServices.push(s); });
+  renderTags();
+}
+
+async function runCompare() {
+  if (!cmpServices.length) { toast('Add at least one service to compare'); return; }
+  const btn = document.getElementById('cmp-btn');
+  btn.disabled = true; btn.innerHTML = '<div class="spin-sm"></div> Comparing...';
+  try {
+    const prompt = `Compare pricing for: ${cmpServices.join(', ')}. Region: ${document.getElementById('cmp-region').value}. Duration: ${document.getElementById('cmp-duration').value}. Commitment: ${document.getElementById('cmp-commit').value}.`;
+    const raw = await callClaude([{ role:'user', content: prompt }], COMPARE_SYSTEM, 1500);
+    const d = extractJSON(raw);
+    renderCompare(d);
+  } catch(e) { toast('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Compare Now';
+}
+
+function renderCompare(d) {
+  const el = document.getElementById('cmp-result'), tbl = document.getElementById('cmp-table');
+  el.style.display = 'block';
+  let html = `<table><thead><tr><th>Service / Resource</th><th style="color:#0078d4">☁ Azure</th><th style="color:#d97706">⬡ AWS</th><th style="color:var(--violet)">⬢ GCP</th><th>Cheapest</th><th>Notes</th></tr></thead><tbody>`;
+  (d.rows||[]).forEach(r => {
+    html += `<tr>
+      <td style="font-weight:600;color:var(--text)">${esc(r.service)}</td>
+      <td><div class="provider-cell"><span class="provider-instance">${esc(r.azure?.instance||'')}</span><span class="provider-price price-azure">${esc(r.azure?.price||'—')}</span><span style="font-size:10px;color:var(--text3)">${esc(r.azure?.monthly||'')}</span></div></td>
+      <td><div class="provider-cell"><span class="provider-instance">${esc(r.aws?.instance||'')}</span><span class="provider-price price-aws">${esc(r.aws?.price||'—')}</span><span style="font-size:10px;color:var(--text3)">${esc(r.aws?.monthly||'')}</span></div></td>
+      <td><div class="provider-cell"><span class="provider-instance">${esc(r.gcp?.instance||'')}</span><span class="provider-price price-gcp">${esc(r.gcp?.price||'—')}</span><span style="font-size:10px;color:var(--text3)">${esc(r.gcp?.monthly||'')}</span></div></td>
+      <td><span class="cheapest-badge2">${esc(r.cheapest||'—')}</span></td>
+      <td style="font-size:11px;color:var(--text3);max-width:200px">${esc(r.notes||'')}</td></tr>`;
+  });
+  html += '</tbody></table>';
+  if (d.summary)    html += `<div class="compare-summary"><strong style="color:var(--text)">Summary:</strong> ${esc(d.summary)}</div>`;
+  if (d.disclaimer) html += `<div class="compare-disclaimer">${esc(d.disclaimer)}</div>`;
+  tbl.innerHTML = html;
+  el.scrollIntoView({ behavior:'smooth' });
+}
+
+// ── Excel (SheetJS — fully client-side) ────────────────────────────────────────
+function onXlFile(input) {
+  const f = input.files[0]; if (!f) return;
+  xlFile = f;
+  document.getElementById('xl-fname').textContent = f.name;
+  document.getElementById('xl-fsize').textContent = fmtSize(f.size);
+  document.getElementById('xl-fp').classList.add('show');
+  document.getElementById('xl-result').classList.remove('show');
+}
+function clearXl() {
+  xlFile = null; xlWorkbook = null;
+  document.getElementById('xl-file').value = '';
+  document.getElementById('xl-fp').classList.remove('show');
+  document.getElementById('xl-result').classList.remove('show');
+}
+
+const XL_SYSTEM = `You are a cloud pricing expert. You will receive spreadsheet data containing cloud resource rows with missing pricing. 
+For each row that represents a cloud resource (VM, storage, GPU, database, network, etc.):
+1. Identify the resource type from the row content
+2. Fill in current approximate prices for Azure, AWS, and GCP where columns exist
+3. Note the cheapest provider
+
+Respond ONLY with valid JSON:
+{"updates":[{"row":2,"azure_price":"$0.192/hr","azure_instance":"D4s_v5","aws_price":"$0.192/hr","aws_instance":"m6i.xlarge","gcp_price":"$0.190/hr","gcp_instance":"n2-standard-4","cheapest":"GCP"}],"count":N,"summary":"brief summary"}
+Row numbers start at 2 (row 1 is header). Only include rows where you added data. No markdown.`;
+
+async function runXlUpdate() {
+  if (!xlFile) { toast('Please upload a spreadsheet first'); return; }
+  const btn = document.getElementById('xl-btn');
+  btn.disabled = true; btn.innerHTML = '<div class="spin-sm"></div> Reading spreadsheet...';
+  try {
+    // Read file with SheetJS
+    const arrayBuffer = await xlFile.arrayBuffer();
+    xlWorkbook = XLSX.read(arrayBuffer, { type: 'array' });
+    const sheetName = xlWorkbook.SheetNames[0];
+    const sheet = xlWorkbook.Sheets[sheetName];
+    const csvData = XLSX.utils.sheet_to_csv(sheet);
+
+    btn.innerHTML = '<div class="spin-sm"></div> Asking AI to fill prices...';
+    const prompt = `Here is the spreadsheet data (CSV format):\n\n${csvData.slice(0, 6000)}\n\nIdentify all cloud resource rows and fill in current Azure, AWS, and GCP pricing.`;
+    const raw = await callClaude([{ role:'user', content: prompt }], XL_SYSTEM, 2000);
+    const result = extractJSON(raw);
+
+    btn.innerHTML = '<div class="spin-sm"></div> Writing updated file...';
+    // Apply updates back to workbook
+    const rows = XLSX.utils.sheet_to_json(sheet, { header:1 });
+    const headers = rows[0] || [];
+
+    // Find column indices for Azure/AWS/GCP price columns
+    const colIdx = (name) => headers.findIndex(h => String(h||'').toLowerCase().includes(name.toLowerCase()));
+    const azureCol  = Math.max(colIdx('azure'), colIdx('az price'), 2);
+    const awsCol    = Math.max(colIdx('aws'),   colIdx('amazon'),   4);
+    const gcpCol    = Math.max(colIdx('gcp'),   colIdx('google'),   6);
+
+    (result.updates || []).forEach(u => {
+      const r = u.row - 1; // 0-based
+      if (!rows[r]) return;
+      const cellToAddr = (row, col) => XLSX.utils.encode_cell({r: row-1, c: col});
+      if (u.azure_price && azureCol >= 0) {
+        const addr = cellToAddr(u.row, azureCol);
+        sheet[addr] = { t:'s', v: u.azure_instance ? `${u.azure_price} (${u.azure_instance})` : u.azure_price };
+      }
+      if (u.aws_price && awsCol >= 0) {
+        const addr = cellToAddr(u.row, awsCol);
+        sheet[addr] = { t:'s', v: u.aws_instance ? `${u.aws_price} (${u.aws_instance})` : u.aws_price };
+      }
+      if (u.gcp_price && gcpCol >= 0) {
+        const addr = cellToAddr(u.row, gcpCol);
+        sheet[addr] = { t:'s', v: u.gcp_instance ? `${u.gcp_price} (${u.gcp_instance})` : u.gcp_price };
+      }
+    });
+
+    // Prepare download
+    xlOutName = xlFile.name.replace(/\.(xlsx?|csv)$/i,'') + '_PricingUpdated.xlsx';
+    const updates = result.count || (result.updates||[]).length;
+
+    document.getElementById('xl-result-body').innerHTML = `
+      <div style="font-size:13px;color:var(--text2);line-height:1.7">
+        AI identified and filled <strong style="color:var(--text)">${updates} cells</strong> with current cloud pricing data across Azure, AWS, and GCP.
+        ${result.summary ? `<br><em>${esc(result.summary)}</em>` : ''}
+        The original spreadsheet structure is preserved.
+      </div>`;
+    document.getElementById('xl-result').classList.add('show');
+    toast('Prices updated! ' + updates + ' cells filled', 'success');
+  } catch(e) { toast('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Fill Prices with AI';
+}
+
+function downloadXl() {
+  if (!xlWorkbook) return;
+  const wbout = XLSX.write(xlWorkbook, { type:'array', bookType:'xlsx' });
+  const blob = new Blob([wbout], { type:'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = xlOutName; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadTemplate() {
+  const data = [
+    ['Resource / Service','Category','Azure Instance/SKU','Azure Price','AWS Instance/SKU','AWS Price','GCP Instance/SKU','GCP Price','Notes'],
+    ['General Purpose VM (4 vCPU, 16GB)','Compute','','','','','','',''],
+    ['H100 GPU Node (8x)','GPU','','','','','','',''],
+    ['H200 GPU Node (8x)','GPU','','','','','','',''],
+    ['A100 GPU (1x)','GPU','','','','','','',''],
+    ['SSD Block Storage (1TB)','Storage','','','','','','',''],
+    ['Object Storage Hot Tier (1TB)','Storage','','','','','','',''],
+    ['Managed SQL DB (4 vCPU)','Database','','','','','','',''],
+    ['Outbound Egress (per 10TB)','Networking','','','','','','',''],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  XLSX.utils.book_append_sheet(wb, ws, 'Cloud Pricing');
+  const wbout = XLSX.write(wb, { type:'array', bookType:'xlsx' });
+  const blob = new Blob([wbout], { type:'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'CloudPricing_Template.xlsx'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────────
+function saveSettings() {
+  const s = getSettings();
+  s.apiKey = document.getElementById('s-apikey').value.trim();
+  s.name   = document.getElementById('s-name').value.trim();
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  // Update session name
+  if (currentUser) { currentUser.name = s.name; localStorage.setItem(SESSION_KEY, JSON.stringify(currentUser)); }
+  // Update users array
+  try {
+    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
+    const u = users.find(x => x.email === currentUser.email);
+    if (u) { u.name = s.name; u.apiKey = s.apiKey; localStorage.setItem(USERS_KEY, JSON.stringify(users)); }
+  } catch(e) {}
+  // Hide API warning if key now set
+  const warnEl = document.getElementById('apiWarn'); if (warnEl && s.apiKey) warnEl.style.display = 'none';
+  const overlayEl = document.getElementById('apiOverlay'); if (overlayEl && s.apiKey) overlayEl.style.display = 'none';
+  toast('Settings saved', 'success');
+}
+
+function clearAllData() {
+  if (!confirm('Clear all locally stored data including chat history and settings? This cannot be undone.')) return;
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('cp_')) keysToRemove.push(k);
+  }
+  keysToRemove.forEach(k => localStorage.removeItem(k));
+  location.replace('auth.html');
+}
+
+function logout() {
+  localStorage.removeItem(SESSION_KEY);
+  location.replace('auth.html');
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function fmtSize(b) { if (b<1024) return b+' B'; if (b<1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s) { return String(s||'').replace(/'/g,"\\'").replace(/\n/g,' ').substring(0,100); }
+function toast(msg, type='') {
+  const t = document.createElement('div');
+  t.style.cssText = `position:fixed;bottom:20px;right:20px;background:${type==='success'?'#f0fdf4':'#fff5f5'};color:${type==='success'?'#059669':'#dc2626'};border:1px solid ${type==='success'?'#a7f3d0':'#fecaca'};padding:10px 16px;border-radius:9px;font-size:13px;font-weight:500;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,.1)`;
+  t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 3500);
+}
+
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f && /\.(xlsx?|csv)$/i.test(f.name)) {
+    const dt = new DataTransfer(); dt.items.add(f);
+    document.getElementById('xl-file').files = dt.files;
+    onXlFile(document.getElementById('xl-file'));
+    goPage('excel');
+  }
+});
+
+// ── API Key Overlay ────────────────────────────────────────────────────────────
+function saveOverlayKey() {
+  const key = document.getElementById('overlayKey').value.trim();
+  const err = document.getElementById('overlayErr');
+  if (!key) { err.textContent = 'Please paste your API key above.'; return; }
+  if (!key.startsWith('sk-')) { err.textContent = 'Key should start with sk- — check you copied the full key.'; return; }
+  const s = getSettings();
+  s.apiKey = key;
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  // Also update settings page input
+  const inp = document.getElementById('s-apikey');
+  if (inp) inp.value = key;
+  // Hide overlay and warning
+  document.getElementById('apiOverlay').style.display = 'none';
+  const w = document.getElementById('apiWarn'); if (w) w.style.display = 'none';
+  toast('API key saved! You can now use Cloud Pricer.', 'success');
+}
+
+// Auto-save API key as user types in Settings
+function autoSaveApiKey(val) {
+  val = val.trim();
+  if (!val) return;
+  const s = getSettings();
+  s.apiKey = val;
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  const w = document.getElementById('apiWarn'); if (w) w.style.display = 'none';
+  const o = document.getElementById('apiOverlay'); if (o) o.style.display = 'none';
+}
+
+// Show overlay if no API key on init
+function checkApiKeyOnLoad() {
+  if (!getApiKey()) {
+    const o = document.getElementById('apiOverlay');
+    if (o) o.style.display = 'flex';
+  }
+}
+
+init();
+checkApiKeyOnLoad();
+</script>
+</body>
+</html>
