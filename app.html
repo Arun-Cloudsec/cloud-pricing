@@ -218,27 +218,34 @@ textarea.chat-input::placeholder{color:var(--text3)}
 <body>
 
 <!-- ══ API KEY FIRST-RUN OVERLAY ══ -->
-<div id="apiOverlay" style="display:none;position:fixed;inset:0;background:rgba(23,19,57,.92);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px)">
-  <div style="background:white;border-radius:16px;padding:36px 32px;max-width:420px;width:calc(100% - 32px);box-shadow:0 24px 60px rgba(0,0,0,.4)">
+<div id="apiOverlay" style="display:none;position:fixed;inset:0;background:rgba(23,19,57,.92);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(8px)" onclick="if(event.target===this)dismissOverlay()">
+  <div style="background:white;border-radius:16px;padding:36px 32px;max-width:420px;width:calc(100% - 32px);box-shadow:0 24px 60px rgba(0,0,0,.4);position:relative">
+    <!-- Close X -->
+    <button onclick="dismissOverlay()" style="position:absolute;top:14px;right:14px;background:none;border:none;font-size:18px;color:#8c84b0;cursor:pointer;line-height:1;padding:4px" title="Skip for now">✕</button>
     <div style="width:52px;height:52px;background:linear-gradient(135deg,#F28D64,#6D69F0);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;box-shadow:0 6px 20px rgba(109,105,240,.3)">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
     </div>
     <div style="font-family:'Fraunces',serif;font-size:22px;font-weight:900;color:#272160;text-align:center;margin-bottom:6px">Add your Anthropic API Key</div>
-    <div style="font-size:13px;color:#8c84b0;text-align:center;margin-bottom:22px;line-height:1.6">Cloud Pricer uses Claude AI to look up real-time cloud pricing. Your key is stored only in your browser — never on any server.</div>
+    <div style="font-size:13px;color:#8c84b0;text-align:center;margin-bottom:22px;line-height:1.6">Cloud Pricer uses Claude AI for real-time cloud pricing queries. Your key is stored only in your browser — never on any server.</div>
     <div style="margin-bottom:6px">
       <label style="display:block;font-size:11px;font-weight:700;color:#7e78a8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Anthropic API Key</label>
       <input id="overlayKey" type="password" placeholder="sk-ant-api03-..."
         style="width:100%;padding:11px 14px;background:#FAF4F5;border:1.5px solid #e3ddf0;border-radius:10px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#272160;outline:none;transition:border-color .2s"
         onfocus="this.style.borderColor='#6D69F0'" onblur="this.style.borderColor='#e3ddf0'"
-        onkeydown="if(event.key==='Enter')saveOverlayKey()">
+        onkeydown="if(event.key==='Enter')saveOverlayKey();if(event.key==='Escape')dismissOverlay()">
     </div>
     <div style="font-size:11px;color:#8c84b0;margin-bottom:18px">
       Get your key at <a href="https://console.anthropic.com" target="_blank" style="color:#6D69F0;font-weight:600">console.anthropic.com</a> → API Keys
     </div>
-    <button onclick="saveOverlayKey()" style="width:100%;padding:12px;background:linear-gradient(135deg,#6D69F0,#272160);color:white;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(109,105,240,.35)">
+    <button onclick="saveOverlayKey()" style="width:100%;padding:12px;background:linear-gradient(135deg,#6D69F0,#272160);color:white;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(109,105,240,.35);margin-bottom:10px">
       Save &amp; Start Using Cloud Pricer →
     </button>
-    <div id="overlayErr" style="font-size:12px;color:#dc2626;text-align:center;margin-top:10px;min-height:18px"></div>
+    <div id="overlayErr" style="font-size:12px;color:#dc2626;text-align:center;min-height:16px;margin-bottom:8px"></div>
+    <div style="text-align:center">
+      <a href="#" onclick="dismissOverlay();return false" style="font-size:12px;color:#8c84b0;text-decoration:none">
+        Skip for now — add key later in ⚙️ Settings
+      </a>
+    </div>
   </div>
 </div>
 
@@ -1558,17 +1565,28 @@ function saveOverlayKey() {
   const key = document.getElementById('overlayKey').value.trim();
   const err = document.getElementById('overlayErr');
   if (!key) { err.textContent = 'Please paste your API key above.'; return; }
-  if (!key.startsWith('sk-')) { err.textContent = 'Key should start with sk- — check you copied the full key.'; return; }
+  // Warn about unexpected format but don't block — key formats may vary
+  if (key.length < 20) { err.textContent = 'Key looks too short — check you copied it fully.'; return; }
+  if (!key.startsWith('sk-') && !key.startsWith('ant-')) {
+    err.textContent = '⚠ Key format looks unusual — saving anyway. If AI features fail, check Settings.';
+    // Don't return — allow saving even with unusual format
+  } else {
+    err.textContent = '';
+  }
   const s = getSettings();
   s.apiKey = key;
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
-  // Also update settings page input
   const inp = document.getElementById('s-apikey');
   if (inp) inp.value = key;
-  // Hide overlay and warning
   document.getElementById('apiOverlay').style.display = 'none';
   const w = document.getElementById('apiWarn'); if (w) w.style.display = 'none';
   toast('API key saved! You can now use Cloud Pricer.', 'success');
+}
+
+// Dismiss overlay without saving (skip for now)
+function dismissOverlay() {
+  const o = document.getElementById('apiOverlay');
+  if (o) o.style.display = 'none';
 }
 
 // Auto-save API key as user types in Settings
@@ -1592,6 +1610,8 @@ function checkApiKeyOnLoad() {
 
 init();
 checkApiKeyOnLoad();
+// ESC key closes API overlay
+document.addEventListener("keydown", function(e){ if(e.key==="Escape") dismissOverlay(); });
 </script>
 </body>
 </html>
