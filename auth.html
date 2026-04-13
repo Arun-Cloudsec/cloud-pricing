@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloud Pricer — Sign In</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Fraunces:ital,opsz,wght@0,9..144,700;0,9..144,800;0,9..144,900&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --orange:#F28D64;--violet:#6D69F0;--purple:#8F70C0;--coral:#DFA69B;--plum:#8D537C;
+  --maroon:#5E110B;--indigo:#272160;--white:#FFFFFF;--offwhite:#FAF4F5;--darkui:#171339;
+}
+body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,var(--offwhite) 0%,#ede8f7 50%,var(--offwhite) 100%);min-height:100vh;display:flex;align-items:center;justify-content:center}
+.wrap{width:100%;max-width:420px;padding:24px}
+.logo{text-align:center;margin-bottom:32px}
+.logo-icon{width:58px;height:58px;background:linear-gradient(135deg,var(--orange),var(--violet));border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;box-shadow:0 8px 24px rgba(109,105,240,.3)}
+.logo-icon svg{width:28px;height:28px;fill:none;stroke:white;stroke-width:2}
+.logo h1{font-family:'Fraunces',serif;font-size:24px;font-weight:900;color:var(--indigo);letter-spacing:-0.5px}
+.logo p{font-size:13px;color:var(--purple);margin-top:4px}
+.provider-dots{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:10px}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot-azure{background:#0078d4}.dot-aws{background:#f59e0b}.dot-gcp{background:var(--violet)}
+.dot-lbl{font-size:11px;color:var(--purple)}
+.card{background:white;border:1px solid #e5dff0;border-radius:16px;padding:28px;box-shadow:0 4px 24px rgba(109,105,240,.1)}
+.tabs{display:flex;background:var(--offwhite);border-radius:10px;padding:4px;margin-bottom:24px}
+.tab{flex:1;text-align:center;padding:8px;font-size:13px;font-weight:500;border-radius:7px;cursor:pointer;color:var(--purple);transition:all .2s}
+.tab.active{background:white;color:var(--violet);font-weight:700;box-shadow:0 1px 4px rgba(109,105,240,.15)}
+.form-title{font-family:'Fraunces',serif;font-size:20px;font-weight:900;color:var(--indigo);margin-bottom:4px;letter-spacing:-0.5px}
+.form-sub{font-size:12px;color:var(--purple);margin-bottom:20px}
+.field{margin-bottom:14px}
+label{display:block;font-size:11px;font-weight:700;color:#7e78a8;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em}
+input{width:100%;padding:10px 13px;background:var(--offwhite);border:1.5px solid #e3ddf0;border-radius:9px;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--indigo);outline:none;transition:border-color .2s}
+input:focus{border-color:var(--violet);background:white;box-shadow:0 0 0 3px rgba(109,105,240,.1)}
+input::placeholder{color:#c0bcd8}
+.btn{width:100%;padding:11px;background:linear-gradient(135deg,var(--violet),var(--indigo));color:white;border:none;border-radius:9px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:7px;margin-top:4px;box-shadow:0 4px 14px rgba(109,105,240,.35)}
+.btn:hover{background:linear-gradient(135deg,#7d79f5,#3632a0);transform:translateY(-1px);box-shadow:0 6px 20px rgba(109,105,240,.4)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+.err{background:#fff0f2;border:1px solid #f7bfc8;color:var(--maroon);font-size:12px;padding:9px 12px;border-radius:8px;margin-bottom:12px;display:none}
+.note{font-size:11px;color:var(--purple);text-align:center;margin-top:12px}
+.note a{color:var(--violet);text-decoration:none;font-weight:600}
+.note a:hover{text-decoration:underline}
+.spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:white;border-radius:50%;animation:sp .6s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#pw-bar{height:3px;background:#e3ddf0;border-radius:99px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+    </div>
+    <h1>Cloud Pricer</h1>
+    <p>Intelligent pricing across Azure, AWS &amp; GCP</p>
+    <div class="provider-dots">
+      <div class="dot dot-azure"></div><span class="dot-lbl">Azure</span>
+      <div class="dot dot-aws"></div><span class="dot-lbl">AWS</span>
+      <div class="dot dot-gcp"></div><span class="dot-lbl">GCP</span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="tabs">
+      <div class="tab active" id="t-login" onclick="sw('login')">Sign in</div>
+      <div class="tab" id="t-reg" onclick="sw('reg')">Create account</div>
+    </div>
+    <div id="f-login">
+      <div class="form-title">Welcome back</div>
+      <div class="form-sub">Sign in to your Cloud Pricer workspace</div>
+      <div class="err" id="le"></div>
+      <div class="field"><label>Email</label><input type="email" id="le-email" placeholder="you@company.com"></div>
+      <div class="field"><label>Password</label><input type="password" id="le-pw" placeholder="Your password"></div>
+      <button class="btn" id="lb" onclick="login()"><span id="lt">Sign in</span></button>
+      <div class="note">No account? <a href="#" onclick="sw('reg');return false">Create one free →</a></div>
+    </div>
+    <div id="f-reg" style="display:none">
+      <div class="form-title">Create account</div>
+      <div class="form-sub">Start querying cloud prices instantly</div>
+      <div class="err" id="re"></div>
+      <div class="field"><label>Name</label><input type="text" id="re-name" placeholder="Your name"></div>
+      <div class="field"><label>Email</label><input type="email" id="re-email" placeholder="you@company.com"></div>
+      <div class="field"><label>Password</label><input type="password" id="re-pw" placeholder="Min 8 characters" oninput="chkPw(this.value)"></div>
+      <div id="pw-bar" style="height:3px;background:#e2e8f0;border-radius:99px;margin-bottom:12px"><div id="pw-fill" style="height:100%;border-radius:99px;transition:all .3s;width:0%"></div></div>
+      <button class="btn" id="rb" onclick="reg()"><span id="rt">Create account</span></button>
+      <div class="note">By signing up you agree to our <a href="#">Terms</a></div>
+    </div>
+  </div>
+</div>
+<script>
+function sw(t){
+  document.getElementById('f-login').style.display=t==='login'?'block':'none';
+  document.getElementById('f-reg').style.display=t==='reg'?'block':'none';
+  document.getElementById('t-login').classList.toggle('active',t==='login');
+  document.getElementById('t-reg').classList.toggle('active',t==='reg');
+  document.getElementById('le').style.display='none';document.getElementById('re').style.display='none';
+}
+function chkPw(v){
+  let s=0;if(v.length>=8)s++;if(v.length>=12)s++;if(/[A-Z]/.test(v)&&/[0-9]/.test(v))s++;if(/[^A-Za-z0-9]/.test(v))s++;
+  const cols=['#ef4444','#f97316','#eab308','#22c55e'];
+  const f=document.getElementById('pw-fill');f.style.width=(s*25)+'%';f.style.background=cols[Math.max(0,s-1)];
+}
+function setLoad(bid,tid,on,label){const b=document.getElementById(bid);b.disabled=on;b.innerHTML=on?'<div class="spin"></div>':`<span id="${tid}">${label}</span>`;}
+function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;e.style.display='block';}
+async function login(){
+  const email=document.getElementById('le-email').value.trim(),pw=document.getElementById('le-pw').value;
+  document.getElementById('le').style.display='none';
+  if(!email||!pw){showErr('le','Please fill in all fields');return;}
+  setLoad('lb','lt',true);
+  try{const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw})});
+    const d=await r.json();if(d.success)location.href='/app';else{setLoad('lb','lt',false,'Sign in');showErr('le',d.error);}
+  }catch(e){setLoad('lb','lt',false,'Sign in');showErr('le','Network error');}
+}
+async function reg(){
+  const name=document.getElementById('re-name').value.trim(),email=document.getElementById('re-email').value.trim(),pw=document.getElementById('re-pw').value;
+  document.getElementById('re').style.display='none';
+  if(!email||!pw){showErr('re','Email and password required');return;}
+  if(pw.length<8){showErr('re','Password must be at least 8 characters');return;}
+  setLoad('rb','rt',true);
+  try{const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw,name})});
+    const d=await r.json();if(d.success)location.href='/app';else{setLoad('rb','rt',false,'Create account');showErr('re',d.error);}
+  }catch(e){setLoad('rb','rt',false,'Create account');showErr('re','Network error');}
+}
+document.addEventListener('keydown',e=>{if(e.key==='Enter'){document.getElementById('f-login').style.display!=='none'?login():reg();}});
+if(location.search.includes('reg'))sw('reg');
+</script>
+</body>
+</html>
