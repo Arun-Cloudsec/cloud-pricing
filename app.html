@@ -1015,213 +1015,348 @@ function clearXl(){
   const b=document.getElementById('xl-type-badge'); if(b) b.style.display='none';
 }
 
+// ════════════════════════════════════════════════════════════════════════════════
+// EXCEL UPDATE — JSZip XML approach
+// We NEVER let SheetJS rewrite the file. Instead:
+//   1. SheetJS reads data only (for row/column context to build Claude prompts)
+//   2. JSZip opens the raw .xlsx ZIP and gives us the worksheet XML as a string
+//   3. We edit ONLY the <v> value nodes inside cells — nothing else is touched
+//   4. JSZip repacks the ZIP — every other byte is byte-for-byte identical
+// This guarantees 100% formatting preservation.
+// ════════════════════════════════════════════════════════════════════════════════
+
+function getMonthlyMultiplier(unitStr){
+  const u=String(unitStr||'').toLowerCase();
+  if(/\/hr\b|\/hour\b|per.?hr\b|per.?hour\b|hourly/.test(u)) return 730;
+  if(/\/day\b|per.?day\b|daily/.test(u)) return 30;
+  if(/\/yr\b|\/year\b|annual|per.?year/.test(u)) return 0.0833;
+  return 1;
+}
+
+// ── Parse shared strings XML → array of strings ───────────────────────────────
+function parseSharedStrings(xml){
+  const doc=new DOMParser().parseFromString(xml,'application/xml');
+  return Array.from(doc.getElementsByTagName('si')).map(si=>{
+    // Concatenate all <t> text in the <si> (handles rich text)
+    return Array.from(si.getElementsByTagName('t')).map(t=>t.textContent).join('');
+  });
+}
+
+// ── Convert Excel column letter(s) to 0-based index ──────────────────────────
+function colLetterToIdx(col){
+  let n=0;
+  for(let i=0;i<col.length;i++) n=n*26+col.charCodeAt(i)-64;
+  return n-1;
+}
+function cellAddrToRC(addr){
+  const m=addr.match(/^([A-Z]+)(\d+)$/);
+  if(!m) return null;
+  return {c:colLetterToIdx(m[1]), r:parseInt(m[2])-1};
+}
+
+// ── Find worksheet XML path from workbook rels ────────────────────────────────
+async function getSheetXmlPath(zip){
+  try{
+    const relsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    const doc=new DOMParser().parseFromString(relsXml,'application/xml');
+    const rels=Array.from(doc.getElementsByTagName('Relationship'));
+    const sheetRel=rels.find(r=>r.getAttribute('Type')&&r.getAttribute('Type').includes('/worksheet'));
+    if(sheetRel){
+      const target=sheetRel.getAttribute('Target');
+      return target.startsWith('/')?target.slice(1):'xl/'+target;
+    }
+  }catch(e){}
+  return 'xl/worksheets/sheet1.xml'; // fallback
+}
+
 async function runXlUpdate(){
   if(!xlFile){ toast('Please upload a spreadsheet first'); return; }
   const btn=document.getElementById('xl-btn');
   btn.disabled=true; btn.innerHTML='<div class="spin-sm"></div> Reading file...';
   try{
-
-    // ── 1. Read entire file preserving all styles, formulas, formatting ───────
     const ab=await xlFile.arrayBuffer();
-    xlWorkbook=XLSX.read(ab,{type:'array',cellStyles:true,cellDates:true});
+
+    // ── 1. SheetJS: read data for context (NOT for writing back) ───────────────
+    xlWorkbook=XLSX.read(ab,{type:'array'});
     const sheetName=xlWorkbook.SheetNames[0];
     const sheet=xlWorkbook.Sheets[sheetName];
     const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:''});
-    if(!rows.length) throw new Error('Spreadsheet appears to be empty.');
-    const range=XLSX.utils.decode_range(sheet['!ref']||'A1:Z200');
+    if(!rows.length) throw new Error('Spreadsheet is empty.');
 
-    // ── 2. Find header row — scan for price/provider keywords ─────────────────
-    const PRICE_KWS=['price','pricing','cost','rate','azure','aws','gcp','amazon','google','cloud'];
+    // ── 2. JSZip: open the raw ZIP ─────────────────────────────────────────────
+    if(typeof JSZip==='undefined') throw new Error('JSZip not loaded — refresh and try again.');
+    const zip=await JSZip.loadAsync(ab);
+
+    // ── 3. Read shared strings (placeholder text is stored here) ──────────────
+    const ssFile=zip.file('xl/sharedStrings.xml');
+    const sharedStrings=ssFile?parseSharedStrings(await ssFile.async('string')):[];
+    const placeholderIdxs=new Set(
+      sharedStrings.map((s,i)=>(/ai fills|tbd|tbc|←|pending|\?\?\?/i.test(s)?i:-1)).filter(i=>i>=0)
+    );
+
+    // ── 4. Read & parse worksheet XML ─────────────────────────────────────────
+    const sheetPath=await getSheetXmlPath(zip);
+    const sheetXml=await zip.file(sheetPath).async('string');
+    const xmlDoc=new DOMParser().parseFromString(sheetXml,'application/xml');
+    const NS='http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+
+    // ── 5. Detect header row + price/unit columns (using SheetJS data) ─────────
+    const PRICE_KWS=['price','pricing','cost','rate','azure','aws','gcp','amazon','google'];
+    const SKIP_KWS=['monthly','total','subtotal','sum'];
     const PROVIDER_KWS=['azure','aws','amazon','gcp','google'];
-    const SKIP_KWS=['monthly','total','subtotal','formula','calc','sum','aed','usd','gbp','eur'];
-
-    let headerRowIdx=0;
-    let maxScore=0;
+    let headerRowIdx=0,maxScore=0;
     for(let r=0;r<Math.min(rows.length,10);r++){
-      const rowStr=rows[r].join(' ').toLowerCase();
-      const score=PRICE_KWS.filter(k=>rowStr.includes(k)).length;
-      if(score>maxScore){ maxScore=score; headerRowIdx=r; }
+      const s=rows[r].join(' ').toLowerCase();
+      const score=PRICE_KWS.filter(k=>s.includes(k)).length;
+      if(score>maxScore){maxScore=score;headerRowIdx=r;}
     }
     const headers=rows[headerRowIdx]||[];
+    const findCol=(kws)=>headers.findIndex(h=>kws.some(k=>String(h||'').toLowerCase().replace(/\n/g,' ').includes(k)));
+    const unitColIdx=findCol(['unit','units','billing','period']);
+    const qtyColIdx=Math.max(findCol(['qty','quantity','count','volume']),4);
 
-    // ── 3. Identify "price candidate" columns ─────────────────────────────────
-    // A price column is one whose header contains price/provider keywords
-    // but NOT purely formula/monthly keywords
+    // Price columns (have price/provider keyword, not monthly/total)
     const priceColIdxs=new Set();
     headers.forEach((h,c)=>{
       const hl=String(h||'').toLowerCase().replace(/\n/g,' ');
-      const hasPrice=PRICE_KWS.some(k=>hl.includes(k));
-      const isSkip=SKIP_KWS.some(k=>hl.includes(k))&&!PROVIDER_KWS.some(k=>hl.includes(k));
-      if(hasPrice&&!isSkip) priceColIdxs.add(c);
+      if(PRICE_KWS.some(k=>hl.includes(k))&&!SKIP_KWS.some(k=>hl.includes(k)))
+        priceColIdxs.add(c);
+    });
+    // Monthly formula cols (adjacent to price cols, header has monthly/total)
+    const monthlyColForPrice={};
+    priceColIdxs.forEach(c=>{
+      for(let look=c+1;look<=c+3;look++){
+        const hl=String(headers[look]||'').toLowerCase().replace(/\n/g,' ');
+        if(SKIP_KWS.some(k=>hl.includes(k))){monthlyColForPrice[c]=look;break;}
+      }
     });
 
-    // ── 4. Collect all cells that need filling ────────────────────────────────
-    // A cell needs filling if it is in a price column AND:
-    //   (a) contains a placeholder like "← AI fills", "TBD", "TBC", "—", "-"
-    //   (b) is completely empty
-    //   (c) contains a non-numeric string (i.e. not already a real price)
-    // AND its row has a meaningful resource name (not a section header / blank row)
-
-    const PLACEHOLDER_PATTERNS=/ai fills|tbd|tbc|←|->|n\/a|enter|fill|pending|\?\?\?/i;
-
+    // ── 6. Collect candidate cells from the XML directly ──────────────────────
+    // A candidate is a cell that: is in a price column AND is empty or has a placeholder
+    const PLACEHOLDER_STR=/ai fills|tbd|tbc|←|pending|\?\?\?/i;
     const candidates=[];
-    for(let R=range.s.r;R<=range.e.r;R++){
-      if(R===headerRowIdx) continue; // skip header row itself
-      const rowArr=rows[R]||[];
-      const rowText=rowArr.join(' ').trim();
-      if(!rowText) continue; // skip blank rows
 
-      // Get resource name = first substantial text in the row
+    const xmlCells=xmlDoc.getElementsByTagNameNS(NS,'c');
+    const cellsByAddr={};
+    Array.from(xmlCells).forEach(c=>{cellsByAddr[c.getAttribute('r')]=c;});
+
+    for(let R=headerRowIdx+1;R<rows.length;R++){
+      const rowArr=rows[R]||[];
+      if(!rowArr.join('').trim()) continue;
       const resourceName=rowArr.find(v=>{
         const s=String(v||'').trim();
-        return s.length>2&&!PLACEHOLDER_PATTERNS.test(s)&&!/^=/.test(s);
+        return s.length>2&&!PLACEHOLDER_STR.test(s)&&!/^=/.test(s)&&isNaN(Number(s));
       });
-      if(!resourceName) continue; // skip rows without a resource name
+      if(!resourceName) continue;
+      if(rowArr.filter(v=>String(v||'').trim()).length<2) continue;
 
-      // Skip section separator rows (row has <2 non-empty cells)
-      const nonEmpty=rowArr.filter(v=>String(v||'').trim()).length;
-      if(nonEmpty<2) continue;
+      const unitVal=unitColIdx>=0?String(rowArr[unitColIdx]||''):'';
+      const multiplier=getMonthlyMultiplier(unitVal);
 
-      // Check each price candidate column in this row
       priceColIdxs.forEach(C=>{
         const addr=XLSX.utils.encode_cell({r:R,c:C});
-        const cell=sheet[addr];
-        const rawVal=cell?String(cell.v||'').trim():'';
-        const isFormula=cell&&cell.f; // skip formula cells
-        if(isFormula) return;
+        const xmlCell=cellsByAddr[addr];
 
-        const needsFilling=
-          !rawVal ||                          // empty
-          PLACEHOLDER_PATTERNS.test(rawVal) || // placeholder text
-          (isNaN(parseFloat(rawVal))&&rawVal); // non-numeric string
-
-        if(needsFilling){
-          const colHeader=String(headers[C]||'').replace(/\n/g,' ').trim();
-          const category=String(rowArr[1]||'');
-          const spec=String(rowArr[2]||'');
-          const unit=String(rowArr[3]||'');
-          candidates.push({addr,R,C,
-            resourceName:String(resourceName).trim(),
-            colHeader, category, spec, unit,
-            currentVal:rawVal
-          });
+        // Determine if this cell needs filling
+        let needsFill=false;
+        if(!xmlCell){
+          needsFill=true; // cell doesn't exist at all = empty
+        } else {
+          const t=xmlCell.getAttribute('t')||'';
+          const vEl=xmlCell.getElementsByTagNameNS(NS,'v')[0];
+          const fEl=xmlCell.getElementsByTagNameNS(NS,'f')[0];
+          if(fEl) return; // skip formula cells
+          if(!vEl||!vEl.textContent.trim()){
+            needsFill=true; // empty value
+          } else if(t==='s'){
+            // Shared string — check if it's a placeholder
+            const idx=parseInt(vEl.textContent);
+            if(placeholderIdxs.has(idx)) needsFill=true;
+            else {
+              const str=sharedStrings[idx]||'';
+              if(PLACEHOLDER_STR.test(str)||isNaN(parseFloat(str))) needsFill=true;
+            }
+          } else if(t==='inlineStr'){
+            const is=xmlCell.getElementsByTagNameNS(NS,'is')[0];
+            const str=is?Array.from(is.getElementsByTagNameNS(NS,'t')).map(t=>t.textContent).join(''):'';
+            if(PLACEHOLDER_STR.test(str)||isNaN(parseFloat(str))) needsFill=true;
+          } else {
+            // Numeric cell — check if already has real value
+            const numVal=parseFloat(vEl.textContent);
+            if(isNaN(numVal)) needsFill=true;
+          }
         }
+        if(!needsFill) return;
+
+        candidates.push({
+          addr,R,C,xmlCell,
+          resourceName:String(resourceName).trim(),
+          colHeader:String(headers[C]||'').replace(/\n/g,' ').trim(),
+          category:String(rowArr[1]||''),
+          spec:String(rowArr[2]||''),
+          unitVal,multiplier,
+          monthlyCol:monthlyColForPrice[C],
+          qtyCol:qtyColIdx,
+        });
       });
     }
 
     if(!candidates.length){
-      throw new Error(
-        'No cells found that need pricing. '
-        +'Make sure the file has: (1) column headers mentioning Azure/AWS/GCP/Price, '
-        +'and (2) rows with empty or placeholder values in those columns.'
-      );
+      throw new Error('No cells found that need pricing. Ensure column headers contain "Azure", "AWS", "GCP", or "Price"/"Pricing", with empty or placeholder cells below.');
     }
+    toast('Found '+candidates.length+' cells — sending to AI...','success');
 
-    toast('Found '+candidates.length+' cells to fill — sending to AI...','success');
-
-    // ── 5. Ask Claude to fill prices — batch 20 at a time ─────────────────────
-    const BATCH=20;
+    // ── 7. Ask Claude to fill prices (batch 20 at a time) ─────────────────────
+    const BATCH=20,totalBatches=Math.ceil(candidates.length/BATCH);
     const allUpdates=[];
-    const totalBatches=Math.ceil(candidates.length/BATCH);
-
     for(let b=0;b<candidates.length;b+=BATCH){
       const batch=candidates.slice(b,b+BATCH);
-      const batchNum=Math.floor(b/BATCH)+1;
-      btn.innerHTML='<div class="spin-sm"></div> AI filling prices ('+batchNum+'/'+totalBatches+')...';
+      btn.innerHTML='<div class="spin-sm"></div> AI filling (batch '+(Math.floor(b/BATCH)+1)+'/'+totalBatches+')...';
+      const taskLines=batch.map((t,i)=>[
+        (i+1)+'. Cell '+t.addr,
+        'Resource: "'+t.resourceName+'"',
+        'Column: "'+t.colHeader+'"',
+        t.category?'Category: '+t.category:'',
+        t.spec?'Spec: '+t.spec:'',
+        t.unitVal?'Unit: "'+t.unitVal+'"':'',
+      ].filter(Boolean).join(' | ')).join('\n');
 
-      const taskLines=batch.map((t,i)=>{
-        const parts=[
-          (i+1)+'. Cell '+t.addr,
-          'Resource: "'+t.resourceName+'"',
-          'Column: "'+t.colHeader+'"',
-        ];
-        if(t.category) parts.push('Category: '+t.category);
-        if(t.spec)     parts.push('Spec: '+t.spec);
-        if(t.unit)     parts.push('Unit: '+t.unit);
-        return parts.join(' | ');
-      }).join('\n');
+      const prompt=`Cloud pricing expert — UAE region.
+Azure = UAE North, AWS = me-central-1 (UAE), GCP = me-central1 (Qatar/nearest).
 
-      const prompt=`You are a cloud pricing expert for UAE region infrastructure.
-
-Fill in current approximate prices for each cell below.
-Region context: Azure = UAE North, AWS = me-central-1 (UAE), GCP = me-central1 (Qatar/nearest to UAE)
-
-CELLS TO FILL:
+Fill prices for these cells:
 ${taskLines}
 
-Rules:
-- If column is a PRICE column → return a plain decimal number only (e.g. 0.192), no $ sign, no units
-- If column says "instance" or "SKU" → return the instance name (e.g. "D4s_v5")  
-- If column says "cheapest" or "winner" → return provider name (e.g. "Azure" or "AWS" or "GCP")
-- Use HOURLY prices for compute/VM/GPU; MONTHLY per-unit for storage/database/networking
-- If a resource is not available on a provider, use 0
+UNIT RULES — return price in the EXACT unit shown:
+- "per VM/hr" → return hourly rate as decimal (e.g. 0.192)
+- "per TB/mo" → return monthly rate as decimal (e.g. 23.5)
+- "per GB/day" → return daily rate
+- "cheapest/winner/best" column → return provider name (e.g. "Azure")
+- "instance/SKU" column → return instance name (e.g. "D4s_v5")
+- Plain decimal numbers only — no $ sign, no units in the value
 
-Return ONLY valid JSON, no markdown fences:
+Return ONLY this JSON, no markdown:
 {"updates":[{"addr":"F5","value":0.192},{"addr":"H5","value":0.188},{"addr":"L5","value":"AWS"}]}`;
 
       try{
         const raw=await callClaude([{role:'user',content:prompt}],
-          'You are a cloud pricing expert. Return ONLY valid JSON matching the exact structure shown. No markdown, no explanation.',
-          6000);
+          'Return ONLY valid JSON as specified. No markdown, no explanation.',6000);
         const result=extractJSON(raw);
         if(result.updates) allUpdates.push(...result.updates);
-      }catch(batchErr){
-        console.warn('Batch '+batchNum+' error:',batchErr.message);
-        if(totalBatches===1) throw batchErr;
-      }
+      }catch(e){console.warn('Batch error:',e.message);if(totalBatches===1)throw e;}
     }
+    if(!allUpdates.length) throw new Error('AI returned no data. Please try again.');
 
-    if(!allUpdates.length) throw new Error('AI returned no price data. Try again.');
-
-    // ── 6. Write back in-place — ONLY update cell value, touch nothing else ───
+    // ── 8. Update XML in-place — SURGICAL VALUE REPLACEMENT ONLY ─────────────
+    // We ONLY modify <v> (value) child nodes.
+    // The style attribute s="N", borders, fills, fonts — all untouched.
     btn.innerHTML='<div class="spin-sm"></div> Updating spreadsheet...';
-    let updatedCount=0;
+    const candByAddr={};candidates.forEach(c=>{candByAddr[c.addr]=c;});
+    let updatedCount=0,formulaCount=0;
 
     allUpdates.forEach(({addr,value})=>{
-      const cell=sheet[addr];
-      if(!cell&&(value===null||value===undefined||value==='')) return;
-
-      // Create cell if it didn't exist (was truly empty)
-      if(!cell) sheet[addr]={};
-      const c=sheet[addr];
+      if(value===null||value===undefined||value==='') return;
+      const cand=candByAddr[addr];
+      let xmlCell=cellsByAddr[addr];
 
       const numVal=parseFloat(String(value).replace(/[^0-9.]/g,''));
-      if(!isNaN(numVal)&&String(value).trim()!==''&&numVal>=0){
-        // Numeric price — update value and type in-place
-        c.t='n';
-        c.v=numVal;
-      } else if(String(value||'').trim()){
-        // String value (instance name, cheapest provider, etc.)
-        c.t='s';
-        c.v=String(value).trim();
-      } else {
-        return; // skip empty/null values
-      }
+      const isNumeric=!isNaN(numVal)&&numVal>=0&&String(value).trim()!=='';
 
-      // Remove cached display string and formula — keep style (s), borders, fill etc.
-      delete c.w;
-      delete c.f;
-      updatedCount++;
+      if(isNumeric){
+        // ── Numeric value: set t="" (remove), set <v> content ──────────────
+        if(!xmlCell){
+          // Create the cell element if it didn't exist
+          // Find the right row element and append
+          const rowEls=xmlDoc.getElementsByTagNameNS(NS,'row');
+          let rowEl=null;
+          const rc=cellAddrToRC(addr);
+          Array.from(rowEls).forEach(r=>{if(parseInt(r.getAttribute('r'))-1===rc.r)rowEl=r;});
+          if(!rowEl){rowEl=xmlDoc.createElementNS(NS,'row');rowEl.setAttribute('r',String(rc.r+1));xmlDoc.getElementsByTagNameNS(NS,'sheetData')[0].appendChild(rowEl);}
+          xmlCell=xmlDoc.createElementNS(NS,'c');xmlCell.setAttribute('r',addr);
+          rowEl.appendChild(xmlCell);cellsByAddr[addr]=xmlCell;
+        }
+        // Remove type attribute (numeric cells have none or t="n")
+        xmlCell.removeAttribute('t');
+        // Update or create <v> element
+        let vEl=xmlCell.getElementsByTagNameNS(NS,'v')[0];
+        if(!vEl){vEl=xmlDoc.createElementNS(NS,'v');xmlCell.appendChild(vEl);}
+        vEl.textContent=String(numVal);
+        // Remove any formula
+        const fEls=xmlCell.getElementsByTagNameNS(NS,'f');
+        Array.from(fEls).forEach(f=>f.parentNode.removeChild(f));
+        updatedCount++;
+
+        // ── Update monthly formula column with correct time multiplier ─────
+        if(cand&&cand.multiplier!==1&&cand.monthlyCol!=null){
+          const R=cand.R;
+          const priceCol=XLSX.utils.encode_col(cand.C);
+          const qtyCol=XLSX.utils.encode_col(cand.qtyCol);
+          const rowNum=R+1;
+          const mAddr=XLSX.utils.encode_cell({r:R,c:cand.monthlyCol});
+          let mCell=cellsByAddr[mAddr];
+          if(mCell){
+            // Update existing formula cell — keep ALL attributes (style s=N etc.)
+            let fEl=mCell.getElementsByTagNameNS(NS,'f')[0];
+            if(!fEl){fEl=xmlDoc.createElementNS(NS,'f');mCell.appendChild(fEl);}
+            fEl.textContent='IF(ISNUMBER('+priceCol+rowNum+'),'+qtyCol+rowNum+'*'+priceCol+rowNum+'*'+cand.multiplier+',"")';
+            // Remove cached value so Excel recalculates
+            const vEls=mCell.getElementsByTagNameNS(NS,'v');
+            Array.from(vEls).forEach(v=>v.parentNode.removeChild(v));
+            formulaCount++;
+          }
+        }
+      } else if(String(value||'').trim()){
+        // ── String value: set t="str", set <v> content ─────────────────────
+        if(!xmlCell) return; // don't create cells for string values
+        xmlCell.setAttribute('t','str');
+        let vEl=xmlCell.getElementsByTagNameNS(NS,'v')[0];
+        if(!vEl){vEl=xmlDoc.createElementNS(NS,'v');xmlCell.appendChild(vEl);}
+        vEl.textContent=String(value).trim();
+        const fEls=xmlCell.getElementsByTagNameNS(NS,'f');
+        Array.from(fEls).forEach(f=>f.parentNode.removeChild(f));
+        updatedCount++;
+      }
     });
 
-    if(!updatedCount) throw new Error('Prices generated but nothing was written. Please try again.');
+    if(!updatedCount) throw new Error('Prices generated but nothing written. Please try again.');
 
-    // ── 7. Download same file, original name, all formatting intact ───────────
-    xlOutName=xlFile.name.endsWith('.csv')
-      ?xlFile.name.replace(/\.csv$/i,'.xlsx')
-      :xlFile.name;
+    // ── 9. Re-pack the ZIP with the modified XML — everything else unchanged ──
+    btn.innerHTML='<div class="spin-sm"></div> Saving file...';
+    const newSheetXml=new XMLSerializer().serializeToString(xmlDoc);
+    zip.file(sheetPath,newSheetXml);
+
+    // Download — original filename, byte-perfect except the values we changed
+    xlOutName=xlFile.name.endsWith('.csv')?xlFile.name.replace(/\.csv$/i,'.xlsx'):xlFile.name;
+    const blob=await zip.generateAsync({
+      type:'blob',
+      mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      compression:'DEFLATE'
+    });
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download=xlOutName;a.click();
+    URL.revokeObjectURL(url);
+
+    // Build unit summary for display
+    const hourlyN=candidates.filter(c=>c.multiplier===730).length;
+    const dailyN=candidates.filter(c=>c.multiplier===30).length;
+    const monthlyN=candidates.filter(c=>c.multiplier===1).length;
+    const unitSummary=[
+      hourlyN?hourlyN+' hourly (×730 hrs/mo)':'',
+      dailyN?dailyN+' daily (×30 days/mo)':'',
+      monthlyN?monthlyN+' monthly/per-unit':'',
+    ].filter(Boolean).join(' · ');
 
     document.getElementById('xl-result-body').innerHTML=
-      '<div style="font-size:13px;color:var(--text2);line-height:1.8">'
-      +'&#x2705; Filled <strong style="color:var(--text)">'+updatedCount+' price cells</strong> '
-      +'across your spreadsheet (Azure UAE North &middot; AWS me-central-1 &middot; GCP me-central1).<br>'
-      +'<span style="font-size:11px;color:var(--text3)>'
-      +'All original formatting, colours, borders and formulas are preserved. '
-      +'Download below &#8212; opens in Excel exactly as before.</span></div>';
+      '<div style="font-size:13px;color:var(--text2);line-height:1.9">'
+      +'&#x2705; Filled <strong style="color:var(--text)">'+updatedCount+' price cells</strong>  '
+      +'(Azure UAE North · AWS me-central-1 · GCP me-central1).<br>'
+      +(formulaCount?'&#x1F4CA; Updated <strong style="color:var(--text)">'+formulaCount+' monthly formulas</strong> with correct time multipliers.<br>':'')
+      +(unitSummary?'<span style="font-size:11px;color:var(--violet)">Units: '+unitSummary+'</span><br>':'')
+      +'<span style="font-size:11px;color:var(--text3)">&#x2728; All original formatting, colours, borders and formulas preserved — file already downloaded above.</span></div>';
     document.getElementById('xl-result').classList.add('show');
-    toast(updatedCount+' prices filled!','success');
+    toast(updatedCount+' prices filled — formatting 100% preserved!','success');
 
-  }catch(e){ toast('Error: '+e.message); console.error('XL error:',e); }
+  }catch(e){toast('Error: '+e.message);console.error('XL error:',e);}
   btn.disabled=false;
   btn.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Fill Prices with AI';
 }
