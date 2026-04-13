@@ -873,11 +873,44 @@ async function callClaude(messages, system, maxTokens){
 }
 
 function extractJSON(raw){
-  if(!raw||!raw.trim()) throw new Error('Empty response from AI.');
-  let clean=raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'').trim();
-  const f=clean.indexOf('{'), l=clean.lastIndexOf('}');
-  if(f===-1||l===-1) throw new Error('AI did not return JSON. Try again.');
-  try{ return JSON.parse(clean.slice(f,l+1)); }catch(e){ throw new Error('Could not parse AI response. Try again.'); }
+  if(!raw||!raw.trim()) throw new Error('Empty response from AI. Check your API key in Settings.');
+
+  // Step 1: strip markdown fences
+  let clean = raw.replace(/^```(?:json)?\s*/im,'').replace(/\s*```\s*$/m,'').trim();
+
+  // Step 2: try parsing as-is first
+  try { return JSON.parse(clean); } catch(e1) {}
+
+  // Step 3: find outermost { ... } boundaries
+  let depth=0, start=-1, end=-1;
+  for(let i=0;i<clean.length;i++){
+    if(clean[i]==='{'){if(depth===0)start=i;depth++;}
+    else if(clean[i]==='}'){depth--;if(depth===0){end=i;break;}}
+  }
+  if(start!==-1&&end!==-1){
+    try{ return JSON.parse(clean.slice(start,end+1)); }catch(e2){}
+  }
+
+  // Step 4: JSON is likely truncated (max_tokens hit) — try to recover partial updates array
+  // Find "updates":[...] and close it manually
+  const updatesMatch = clean.match(/"updates"\s*:\s*\[/);
+  if(updatesMatch){
+    let startIdx = clean.indexOf(updatesMatch[0]);
+    let arrStart = clean.indexOf('[', startIdx);
+    // Find last complete object in the array
+    let lastClose = clean.lastIndexOf('}');
+    if(lastClose > arrStart){
+      let partial = clean.slice(0, lastClose+1) + ']}';
+      // Also need to close the outer object
+      try{
+        return JSON.parse('{"updates":' + clean.slice(arrStart, lastClose+1) + '],"count":0,"summary":"Partial results (response was truncated)"}');
+      }catch(e3){}
+    }
+  }
+
+  // Step 5: nothing worked — show a helpful error with what was received
+  const preview = raw.slice(0,200).replace(/\n/g,' ');
+  throw new Error('Could not parse AI response. Raw: ' + preview + (raw.length>200?'...':''));
 }
 
 const CHAT_SYSTEM=`You are Cloud Pricer, an expert AI assistant for cloud infrastructure pricing across Azure, AWS, and GCP.
@@ -974,52 +1007,118 @@ async function runXlUpdate(){
   const btn=document.getElementById('xl-btn');
   btn.disabled=true; btn.innerHTML='<div class="spin-sm"></div> Reading file...';
   try{
+    // ── 1. Read file ──────────────────────────────────────────────
     const ab=await xlFile.arrayBuffer();
     xlWorkbook=XLSX.read(ab,{type:'array'});
     const sheet=xlWorkbook.Sheets[xlWorkbook.SheetNames[0]];
     const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:''});
     if(!rows.length) throw new Error('Spreadsheet is empty.');
+
+    // ── 2. Detect header row and column positions ─────────────────
     const hIdx=findHeaderRow(rows);
     const headers=rows[hIdx];
-    const aPrice=findCol(headers,['azure price','azure/unit','azure (','azure price/unit']);
-    const wPrice=findCol(headers,['aws price','aws/unit','aws (','aws price/unit','amazon price']);
-    const gPrice=findCol(headers,['gcp price','gcp/unit','gcp (','gcp price/unit','google price']);
-    const aInst=findCol(headers,['azure instance','azure sku','azure/sku']);
-    const wInst=findCol(headers,['aws instance','aws sku','amazon instance']);
-    const gInst=findCol(headers,['gcp instance','gcp sku','google instance']);
-    const chCol=findCol(headers,['cheapest','lowest','best price']);
-    const aC=aPrice>=0?aPrice:5, wC=wPrice>=0?wPrice:7, gC=gPrice>=0?gPrice:9, cC=chCol>=0?chCol:11;
-    const toCSV=r=>r.map(c=>String(c||'').replace(/\n/g,' ').replace(/,/g,';')).join(',');
-    const hLine=toCSV(headers);
-    const dLines=rows.slice(hIdx+1).map((r,i)=>(hIdx+2+i)+'|'+toCSV(r)).filter(l=>!/^[0-9]+\|,*$/.test(l));
-    const csv=(hLine+'\n'+dLines.join('\n')).slice(0,14000);
-    btn.innerHTML='<div class="spin-sm"></div> AI filling prices...';
-    const prompt='Fill cloud resource prices. Header: '+headers.filter(h=>h).join(' | ')+'\nColumn map: Azure='+aC+', AWS='+wC+', GCP='+gC+'\nData:\n'+csv+'\nReturn JSON: {"updates":[{"excel_row":5,"azure_price":0.192,"azure_instance":"D4s_v5","aws_price":0.188,"aws_instance":"m6i.xlarge","gcp_price":0.190,"gcp_instance":"n2-standard-4","cheapest":"AWS"}],"count":N,"summary":"summary"}\nPrices: plain decimals only. Rows start at '+(hIdx+2)+'.';
-    const raw=await callClaude([{role:'user',content:prompt}],'You are a cloud pricing expert. Return ONLY valid JSON as specified. No markdown.',4000);
-    const result=extractJSON(raw);
-    const updates=result.updates||[];
-    if(!updates.length) throw new Error('AI returned no pricing updates.');
-    btn.innerHTML='<div class="spin-sm"></div> Writing prices...';
-    let priceCount=0,rowCount=0;
-    updates.forEach(u=>{
+    const aC=Math.max(findCol(headers,['azure price','azure/unit','azure (']),5);
+    const wC=Math.max(findCol(headers,['aws price','aws/unit','aws (']),7);
+    const gC=Math.max(findCol(headers,['gcp price','gcp/unit','gcp (']),9);
+    const aI=findCol(headers,['azure instance','azure sku','azure/sku']);
+    const wI=findCol(headers,['aws instance','aws sku','amazon instance']);
+    const gI=findCol(headers,['gcp instance','gcp sku','google instance']);
+    const cC=Math.max(findCol(headers,['cheapest','lowest','best price']),11);
+
+    // ── 3. Build data rows for AI — filter section headers, keep resources ──
+    const dataRows=[];
+    rows.slice(hIdx+1).forEach((r,i)=>{
+      const excelRow=hIdx+2+i;
+      const rowText=r.join(' ').trim();
+      // Skip blank rows, section header rows (short all-caps), formula rows
+      if(!rowText) return;
+      if(rowText.length<3) return;
+      const firstCell=String(r[0]||'').trim();
+      if(!firstCell||firstCell.startsWith('=')) return;
+      // Skip section separator rows (< 2 non-empty cells)
+      const nonEmpty=r.filter(c=>String(c||'').trim()).length;
+      if(nonEmpty<2) return;
+      dataRows.push({excelRow, cells:r.map(c=>String(c||'').replace(/\n/g,' ').slice(0,60))});
+    });
+
+    if(!dataRows.length) throw new Error('No data rows found in spreadsheet.');
+
+    // ── 4. Process in batches of 15 rows (avoids token limit) ────
+    const BATCH=15;
+    let allUpdates=[], totalPriceCount=0, totalRowCount=0;
+    const batches=[];
+    for(let i=0;i<dataRows.length;i+=BATCH) batches.push(dataRows.slice(i,i+BATCH));
+
+    const headerStr=headers.map((h,i)=>i+':'+String(h||'').replace(/\n/g,' ')).filter((_,i)=>i<13).join(', ');
+
+    for(let b=0;b<batches.length;b++){
+      btn.innerHTML='<div class="spin-sm"></div> AI filling prices (batch '+(b+1)+'/'+batches.length+')...';
+      const batch=batches[b];
+      const batchCSV=batch.map(({excelRow,cells})=>excelRow+'|'+cells.slice(0,13).join('|')).join('\n');
+
+      const prompt=`Fill cloud prices for these spreadsheet rows.
+
+COLUMN POSITIONS (0-indexed): Azure price=${aC}, AWS price=${wC}, GCP price=${gC}, Cheapest=${cC}
+HEADERS: ${headerStr}
+REGION: Azure=UAE North, AWS=me-central-1, GCP=me-central1
+
+DATA (format: EXCEL_ROW|col0|col1|col2|...):
+${batchCSV}
+
+For each row that is a cloud resource (VM, GPU, storage, DB, network, security, AI/ML):
+- Fill current approximate list prices as plain DECIMAL NUMBERS only (e.g. 0.192 not "$0.192/hr")
+- Include specific SKU/instance names
+- Identify cheapest provider
+
+Return ONLY this exact JSON structure, no extra text:
+{"updates":[{"excel_row":5,"azure_price":0.192,"azure_instance":"D4s_v5","aws_price":0.188,"aws_instance":"m6i.xlarge","gcp_price":0.190,"gcp_instance":"n2-standard-4","cheapest":"AWS"}],"summary":"done"}`;
+
+      try{
+        const raw=await callClaude([{role:'user',content:prompt}],
+          'You fill cloud resource prices. Output ONLY valid JSON matching the exact structure shown. No markdown fences, no explanation.',
+          6000);
+        const result=extractJSON(raw);
+        if(result.updates&&result.updates.length) allUpdates.push(...result.updates);
+      }catch(batchErr){
+        console.warn('Batch '+(b+1)+' error:',batchErr.message);
+        // Continue with next batch rather than failing entirely
+        if(b===0&&batches.length===1) throw batchErr; // only fail if single batch
+      }
+    }
+
+    if(!allUpdates.length) throw new Error('AI returned no pricing data. Ensure the file has cloud resource rows with recognisable Azure/AWS/GCP price columns.');
+
+    // ── 5. Write all prices back to the workbook ─────────────────
+    btn.innerHTML='<div class="spin-sm"></div> Writing prices to file...';
+    allUpdates.forEach(u=>{
       const excelRow=parseInt(u.excel_row); if(!excelRow||excelRow<1) return;
       let wrote=false;
-      const ap=parsePrice(u.azure_price); if(ap!==null){if(writeNumCell(sheet,excelRow,aC,ap)){priceCount++;wrote=true;}}
-      if(u.azure_instance) writeStrCell(sheet,excelRow,aInst,u.azure_instance);
-      const wp=parsePrice(u.aws_price); if(wp!==null){if(writeNumCell(sheet,excelRow,wC,wp)){priceCount++;}}
-      if(u.aws_instance) writeStrCell(sheet,excelRow,wInst,u.aws_instance);
-      const gp=parsePrice(u.gcp_price); if(gp!==null){if(writeNumCell(sheet,excelRow,gC,gp)){priceCount++;}}
-      if(u.gcp_instance) writeStrCell(sheet,excelRow,gInst,u.gcp_instance);
-      if(u.cheapest) writeStrCell(sheet,excelRow,cC,u.cheapest);
-      if(wrote) rowCount++;
+      const ap=parsePrice(u.azure_price); if(ap!==null&&writeNumCell(sheet,excelRow,aC,ap)){totalPriceCount++;wrote=true;}
+      if(u.azure_instance&&aI>=0) writeStrCell(sheet,excelRow,aI,u.azure_instance);
+      const wp=parsePrice(u.aws_price);   if(wp!==null&&writeNumCell(sheet,excelRow,wC,wp)) totalPriceCount++;
+      if(u.aws_instance&&wI>=0)   writeStrCell(sheet,excelRow,wI,u.aws_instance);
+      const gp=parsePrice(u.gcp_price);   if(gp!==null&&writeNumCell(sheet,excelRow,gC,gp)) totalPriceCount++;
+      if(u.gcp_instance&&gI>=0)   writeStrCell(sheet,excelRow,gI,u.gcp_instance);
+      if(u.cheapest)               writeStrCell(sheet,excelRow,cC,u.cheapest);
+      if(wrote) totalRowCount++;
     });
-    if(priceCount===0) throw new Error('Prices generated but could not be written — check column headers include Azure/AWS/GCP.');
+
+    if(totalPriceCount===0) throw new Error('Prices were generated but could not be written. The column headers may not match — add headers like "Azure Price", "AWS Price", "GCP Price".');
+
     xlOutName=xlFile.name.replace(/\.(xlsx?|csv)$/i,'')+'_PricingUpdated.xlsx';
-    document.getElementById('xl-result-body').innerHTML='<div style="font-size:13px;color:var(--text2);line-height:1.8">Filled <strong style="color:var(--text)">'+priceCount+' price cells</strong> across <strong style="color:var(--text)">'+rowCount+' rows</strong>.'+(result.summary?'<br><em style="color:var(--text3);font-size:12px">'+esc(result.summary)+'</em>':'')+'<br><span style="font-size:11px;color:var(--text3)">Approximate vendor list prices. Monthly formulas auto-calculate from these numbers.</span></div>';
+    document.getElementById('xl-result-body').innerHTML=
+      '<div style="font-size:13px;color:var(--text2);line-height:1.8">'
+      +'Filled <strong style="color:var(--text)">'+totalPriceCount+' price cells</strong> across '
+      +'<strong style="color:var(--text)">'+totalRowCount+' resource rows</strong> '
+      +'(Azure UAE North &middot; AWS me-central-1 &middot; GCP me-central1).<br>'
+      +'<span style="font-size:11px;color:var(--text3)">Prices are approximate vendor list prices. '
+      +'Monthly cost formulas auto-calculate from these numbers.</span></div>';
     document.getElementById('xl-result').classList.add('show');
-    toast(priceCount+' price cells filled!','success');
-  }catch(e){ toast('Error: '+e.message); console.error(e); }
-  btn.disabled=false; btn.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Fill Prices with AI';
+    toast(totalPriceCount+' prices filled across '+totalRowCount+' rows!','success');
+
+  }catch(e){ toast('Error: '+e.message); console.error('XL error:',e); }
+  btn.disabled=false;
+  btn.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Fill Prices with AI';
 }
 
 function downloadXl(){
