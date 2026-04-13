@@ -41,7 +41,7 @@ input::placeholder{color:#c0bcd8}
 .note a:hover{text-decoration:underline}
 .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:white;border-radius:50%;animation:sp .6s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
-#pw-bar{height:3px;background:#e3ddf0;border-radius:99px;margin-bottom:12px}
+.static-notice{background:rgba(109,105,240,.06);border:1px solid rgba(109,105,240,.18);border-radius:8px;padding:9px 12px;font-size:11px;color:var(--purple);text-align:center;margin-bottom:16px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -59,6 +59,7 @@ input::placeholder{color:#c0bcd8}
     </div>
   </div>
   <div class="card">
+    <div class="static-notice">🔒 Account stored locally in your browser · No server required</div>
     <div class="tabs">
       <div class="tab active" id="t-login" onclick="sw('login')">Sign in</div>
       <div class="tab" id="t-reg" onclick="sw('reg')">Create account</div>
@@ -78,49 +79,118 @@ input::placeholder{color:#c0bcd8}
       <div class="err" id="re"></div>
       <div class="field"><label>Name</label><input type="text" id="re-name" placeholder="Your name"></div>
       <div class="field"><label>Email</label><input type="email" id="re-email" placeholder="you@company.com"></div>
-      <div class="field"><label>Password</label><input type="password" id="re-pw" placeholder="Min 8 characters" oninput="chkPw(this.value)"></div>
-      <div id="pw-bar" style="height:3px;background:#e2e8f0;border-radius:99px;margin-bottom:12px"><div id="pw-fill" style="height:100%;border-radius:99px;transition:all .3s;width:0%"></div></div>
+      <div class="field"><label>Password</label>
+        <input type="password" id="re-pw" placeholder="Min 8 characters" oninput="chkPw(this.value)">
+      </div>
+      <div style="height:3px;background:#e2e8f0;border-radius:99px;margin-bottom:12px">
+        <div id="pw-fill" style="height:100%;border-radius:99px;transition:all .3s;width:0%"></div>
+      </div>
       <button class="btn" id="rb" onclick="reg()"><span id="rt">Create account</span></button>
       <div class="note">By signing up you agree to our <a href="#">Terms</a></div>
     </div>
   </div>
 </div>
 <script>
-function sw(t){
-  document.getElementById('f-login').style.display=t==='login'?'block':'none';
-  document.getElementById('f-reg').style.display=t==='reg'?'block':'none';
-  document.getElementById('t-login').classList.toggle('active',t==='login');
-  document.getElementById('t-reg').classList.toggle('active',t==='reg');
-  document.getElementById('le').style.display='none';document.getElementById('re').style.display='none';
+// ── Storage key ───────────────────────────────────────────────────
+const USERS_KEY = 'cp_users';
+const SESSION_KEY = 'cp_session';
+
+// ── Auto-redirect if already logged in ───────────────────────────
+const sess = localStorage.getItem(SESSION_KEY);
+if (sess) {
+  try {
+    const s = JSON.parse(sess);
+    if (s && s.email) location.replace('app.html');
+  } catch(e) { localStorage.removeItem(SESSION_KEY); }
 }
-function chkPw(v){
-  let s=0;if(v.length>=8)s++;if(v.length>=12)s++;if(/[A-Z]/.test(v)&&/[0-9]/.test(v))s++;if(/[^A-Za-z0-9]/.test(v))s++;
+
+// ── Password hashing (SHA-256 via Web Crypto) ─────────────────────
+async function hashPw(pw, salt) {
+  const enc = new TextEncoder();
+  const data = enc.encode(pw + '::cp::' + salt);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+function getUsers() {
+  try { return JSON.parse(localStorage.getItem(USERS_KEY) || '[]'); } catch(e) { return []; }
+}
+function saveUsers(u) { localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
+
+// ── UI helpers ────────────────────────────────────────────────────
+function sw(t) {
+  document.getElementById('f-login').style.display = t==='login'?'block':'none';
+  document.getElementById('f-reg').style.display   = t==='reg'?'block':'none';
+  document.getElementById('t-login').classList.toggle('active', t==='login');
+  document.getElementById('t-reg').classList.toggle('active', t==='reg');
+  document.getElementById('le').style.display = 'none';
+  document.getElementById('re').style.display = 'none';
+}
+function chkPw(v) {
+  let s=0;
+  if(v.length>=8)s++; if(v.length>=12)s++;
+  if(/[A-Z]/.test(v)&&/[0-9]/.test(v))s++;
+  if(/[^A-Za-z0-9]/.test(v))s++;
   const cols=['#ef4444','#f97316','#eab308','#22c55e'];
-  const f=document.getElementById('pw-fill');f.style.width=(s*25)+'%';f.style.background=cols[Math.max(0,s-1)];
+  const f = document.getElementById('pw-fill');
+  f.style.width=(s*25)+'%';
+  f.style.background = cols[Math.max(0,s-1)];
 }
-function setLoad(bid,tid,on,label){const b=document.getElementById(bid);b.disabled=on;b.innerHTML=on?'<div class="spin"></div>':`<span id="${tid}">${label}</span>`;}
-function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;e.style.display='block';}
-async function login(){
-  const email=document.getElementById('le-email').value.trim(),pw=document.getElementById('le-pw').value;
-  document.getElementById('le').style.display='none';
-  if(!email||!pw){showErr('le','Please fill in all fields');return;}
+function setLoad(bid, tid, on, label) {
+  const b = document.getElementById(bid);
+  b.disabled = on;
+  b.innerHTML = on ? '<div class="spin"></div>' : `<span id="${tid}">${label}</span>`;
+}
+function showErr(id, msg) {
+  const e = document.getElementById(id);
+  e.textContent = msg;
+  e.style.display = 'block';
+}
+
+// ── Login ─────────────────────────────────────────────────────────
+async function login() {
+  const email = document.getElementById('le-email').value.trim().toLowerCase();
+  const pw    = document.getElementById('le-pw').value;
+  document.getElementById('le').style.display = 'none';
+  if (!email || !pw) { showErr('le','Please fill in all fields'); return; }
   setLoad('lb','lt',true);
-  try{const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw})});
-    const d=await r.json();if(d.success)location.href='/app';else{setLoad('lb','lt',false,'Sign in');showErr('le',d.error);}
-  }catch(e){setLoad('lb','lt',false,'Sign in');showErr('le','Network error');}
+  const users = getUsers();
+  const user  = users.find(u => u.email === email);
+  if (!user) { setLoad('lb','lt',false,'Sign in'); showErr('le','No account found with this email'); return; }
+  const hash = await hashPw(pw, email);
+  if (hash !== user.passwordHash) { setLoad('lb','lt',false,'Sign in'); showErr('le','Incorrect password'); return; }
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ email: user.email, name: user.name || '', id: user.id }));
+  location.replace('app.html');
 }
-async function reg(){
-  const name=document.getElementById('re-name').value.trim(),email=document.getElementById('re-email').value.trim(),pw=document.getElementById('re-pw').value;
-  document.getElementById('re').style.display='none';
-  if(!email||!pw){showErr('re','Email and password required');return;}
-  if(pw.length<8){showErr('re','Password must be at least 8 characters');return;}
+
+// ── Register ──────────────────────────────────────────────────────
+async function reg() {
+  const name  = document.getElementById('re-name').value.trim();
+  const email = document.getElementById('re-email').value.trim().toLowerCase();
+  const pw    = document.getElementById('re-pw').value;
+  document.getElementById('re').style.display = 'none';
+  if (!email || !pw) { showErr('re','Email and password required'); return; }
+  if (pw.length < 8) { showErr('re','Password must be at least 8 characters'); return; }
+  const users = getUsers();
+  if (users.find(u => u.email === email)) { showErr('re','An account with this email already exists'); return; }
   setLoad('rb','rt',true);
-  try{const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw,name})});
-    const d=await r.json();if(d.success)location.href='/app';else{setLoad('rb','rt',false,'Create account');showErr('re',d.error);}
-  }catch(e){setLoad('rb','rt',false,'Create account');showErr('re','Network error');}
+  const hash = await hashPw(pw, email);
+  const user = { id: Date.now().toString(), email, name, passwordHash: hash, createdAt: new Date().toISOString(), apiKey: '' };
+  users.push(user);
+  saveUsers(users);
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ email: user.email, name: user.name, id: user.id }));
+  location.replace('app.html');
 }
-document.addEventListener('keydown',e=>{if(e.key==='Enter'){document.getElementById('f-login').style.display!=='none'?login():reg();}});
-if(location.search.includes('reg'))sw('reg');
+
+// ── Keyboard shortcut ─────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    document.getElementById('f-login').style.display !== 'none' ? login() : reg();
+  }
+});
+
+// ── Pre-fill reg tab if ?reg in URL ──────────────────────────────
+if (location.search.includes('reg')) sw('reg');
 </script>
 </body>
 </html>
