@@ -6,6 +6,10 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Fraunces:ital,opsz,wght@0,9..144,700;0,9..144,800;0,9..144,900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <!-- SheetJS for Excel read/write entirely in the browser -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- JSZip for .docx (ZIP) manipulation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- Mammoth for Word document text extraction -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -396,35 +400,46 @@ textarea.chat-input::placeholder{color:var(--text3)}
     </div>
   </div>
 
-  <!-- EXCEL PAGE -->
+  <!-- EXCEL / WORD PAGE -->
   <div class="page" id="page-excel">
-    <div class="topbar"><div class="tb-title">Update Excel with Cloud Pricing</div></div>
+    <div class="topbar">
+      <div class="tb-title" id="xl-page-title">Fill Document with Cloud Pricing</div>
+      <span id="xl-type-badge" class="tb-badge badge-azure" style="display:none"></span>
+    </div>
     <div class="excel-wrap">
       <div class="info-banner">
-        <strong>How it works:</strong> Upload your pricing spreadsheet (.xlsx or .csv). The AI reads every row, identifies cloud resources with missing or outdated pricing, and fills in current Azure, AWS, and GCP prices. Download the updated file instantly — all processing happens in your browser.
+        <strong>How it works:</strong> Upload a pricing spreadsheet <strong>(.xlsx, .csv)</strong> or Word document <strong>(.docx)</strong>.
+        The AI reads every row / table, identifies cloud resources, and fills in current Azure, AWS &amp; GCP prices.
+        Monthly cost formulas auto-calculate. Download the updated file instantly — everything runs in your browser.
+      </div>
+      <!-- Format selector tabs -->
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <button class="btn btn-ghost" id="fmt-xl" onclick="setFileFormat('xl')" style="font-size:12px;padding:6px 14px;font-weight:700;border-color:var(--violet);color:var(--violet)">📊 Excel / CSV</button>
+        <button class="btn btn-ghost" id="fmt-doc" onclick="setFileFormat('doc')" style="font-size:12px;padding:6px 14px">📝 Word (.docx)</button>
       </div>
       <div class="excel-dropzone" id="xl-zone">
-        <input type="file" id="xl-file" accept=".xlsx,.xls,.csv" onchange="onXlFile(this)">
-        <div class="excel-icon">📊</div>
-        <div class="excel-title">Drop your pricing spreadsheet here</div>
-        <div class="excel-hint">Supports .xlsx, .xls, .csv · AI will identify resources and fill in current cloud prices</div>
+        <input type="file" id="xl-file" accept=".xlsx,.xls,.csv,.docx" onchange="onXlFile(this)">
+        <div class="excel-icon" id="xl-drop-icon">📊</div>
+        <div class="excel-title" id="xl-drop-title">Drop your file here or click to browse</div>
+        <div class="excel-hint" id="xl-drop-hint">Excel: .xlsx, .xls, .csv · Word: .docx · AI fills Azure, AWS &amp; GCP prices</div>
       </div>
       <div class="excel-fp" id="xl-fp">
-        <div style="font-size:24px">📊</div>
+        <div style="font-size:24px" id="xl-fp-icon">📊</div>
         <div class="excel-info"><div class="excel-name" id="xl-fname">—</div><div class="excel-size" id="xl-fsize">—</div></div>
         <button class="excel-rm" onclick="clearXl()">✕</button>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:14px">
-        <button class="btn btn-primary" id="xl-btn" onclick="runXlUpdate()">
+        <button class="btn btn-primary" id="xl-btn" onclick="fillPricesDispatch()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>Fill Prices with AI
         </button>
-        <button class="btn btn-ghost" onclick="downloadTemplate()">📥 Download template</button>
+        <button class="btn btn-ghost" onclick="downloadTemplate()">📥 Excel template</button>
+        <button class="btn btn-ghost" onclick="downloadDocxTemplate()">📥 Word template</button>
       </div>
       <div class="excel-result" id="xl-result">
-        <div class="excel-result-title">✅ Prices Updated Successfully</div>
+        <div class="excel-result-title" id="xl-result-title">✅ Prices Updated Successfully</div>
         <div id="xl-result-body"></div>
-        <button class="btn btn-primary" style="margin-top:12px" onclick="downloadXl()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download Updated Spreadsheet
+        <button class="btn btn-primary" style="margin-top:12px" id="xl-download-btn" onclick="downloadUpdatedFile()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download Updated File
         </button>
       </div>
     </div>
@@ -483,6 +498,7 @@ const GPU_CATALOGUE = [
 let currentUser = null;
 let selectedGpus = new Set();
 let chatHistory = [], cmpServices = [], xlFile = null, xlWorkbook = null, xlOutName = '';
+let xlDocxBlob = null, xlFileFormat = 'xl'; // 'xl' or 'doc'
 
 // ── Auth check — redirect to auth.html if not logged in ───────────────────────
 function checkAuth() {
@@ -848,99 +864,610 @@ function renderCompare(d) {
   el.scrollIntoView({ behavior:'smooth' });
 }
 
+// ── File format selector ──────────────────────────────────────────────────────
+function setFileFormat(fmt) {
+  xlFileFormat = fmt;
+  const isDoc = fmt === 'doc';
+  document.getElementById('fmt-xl').style.borderColor  = isDoc ? '' : 'var(--violet)';
+  document.getElementById('fmt-xl').style.color        = isDoc ? '' : 'var(--violet)';
+  document.getElementById('fmt-doc').style.borderColor = isDoc ? 'var(--orange)' : '';
+  document.getElementById('fmt-doc').style.color       = isDoc ? 'var(--orange)' : '';
+  document.getElementById('xl-drop-icon').textContent  = isDoc ? '📝' : '📊';
+  document.getElementById('xl-drop-title').textContent = isDoc ? 'Drop your Word document here' : 'Drop your pricing spreadsheet here';
+  document.getElementById('xl-drop-hint').textContent  = isDoc
+    ? 'Supports .docx · AI finds tables with cloud resources and fills prices'
+    : 'Supports .xlsx, .xls, .csv · AI fills Azure, AWS & GCP prices';
+  document.getElementById('xl-file').accept = isDoc ? '.docx' : '.xlsx,.xls,.csv';
+  clearXl();
+}
+
+// ── Dispatch to the right handler based on file type ──────────────────────────
+function fillPricesDispatch() {
+  if (!xlFile) { toast('Please upload a file first'); return; }
+  if (/\.docx$/i.test(xlFile.name)) runDocxUpdate();
+  else runXlUpdate();
+}
+
+function downloadUpdatedFile() {
+  if (/\.docx$/i.test(xlFile?.name || '')) downloadDocx();
+  else downloadXl();
+}
+
+// ── WORD / DOCX PROCESSING (JSZip + Mammoth + Claude) ─────────────────────────
+const W_NS  = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const W_PRE = 'w';
+
+// Get all text from a DOCX XML element
+function wGetText(el) {
+  return Array.from(el.getElementsByTagNameNS(W_NS, 't'))
+    .map(t => t.textContent).join('').trim();
+}
+
+// Set text in a DOCX table cell, preserving existing run properties (bold, font etc.)
+function wSetCellText(xmlDoc, cell, newText) {
+  const paras = cell.getElementsByTagNameNS(W_NS, 'p');
+  const para  = paras[0] || xmlDoc.createElementNS(W_NS, W_PRE + ':p');
+  if (!paras[0]) cell.appendChild(para);
+
+  // Preserve run properties from first existing run, then clear all runs
+  let rPr = null;
+  const existingRuns = para.getElementsByTagNameNS(W_NS, 'r');
+  if (existingRuns[0]) {
+    const existingRPr = existingRuns[0].getElementsByTagNameNS(W_NS, 'rPr')[0];
+    if (existingRPr) rPr = existingRPr.cloneNode(true);
+  }
+  while (existingRuns.length) existingRuns[0].parentNode.removeChild(existingRuns[0]);
+
+  // Add new run with text
+  const run = xmlDoc.createElementNS(W_NS, W_PRE + ':r');
+  if (rPr) run.appendChild(rPr);
+  const t = xmlDoc.createElementNS(W_NS, W_PRE + ':t');
+  t.textContent = newText;
+  if (newText.startsWith(' ') || newText.endsWith(' ')) t.setAttributeNS('http://www.w3.org/XML/1998/namespace', 'xml:space', 'preserve');
+  run.appendChild(t);
+  para.appendChild(run);
+}
+
+// Extract all tables from DOCX XML as structured data
+function wExtractTables(xmlDoc) {
+  const tables = [];
+  const tblEls = xmlDoc.getElementsByTagNameNS(W_NS, 'tbl');
+  Array.from(tblEls).forEach((tbl, ti) => {
+    const rows = [];
+    Array.from(tbl.getElementsByTagNameNS(W_NS, 'tr')).forEach((tr, ri) => {
+      const cells = Array.from(tr.getElementsByTagNameNS(W_NS, 'tc')).map(tc => wGetText(tc));
+      rows.push(cells);
+    });
+    if (rows.length > 0) tables.push({ tblIdx: ti, rows });
+  });
+  return tables;
+}
+
+// Build a readable text representation of tables for Claude
+function wTablesToText(tables) {
+  return tables.map((tbl, ti) =>
+    `=== TABLE ${ti + 1} ===
+` +
+    tbl.rows.map((row, ri) =>
+      `Row ${ri + 1}: ${row.join(' | ')}`
+    ).join('
+')
+  ).join('
+
+');
+}
+
+// Detect which columns in a table header row contain Azure/AWS/GCP prices
+function wDetectPriceCols(headerRow) {
+  const find = (kws) => headerRow.findIndex(h => {
+    const hl = (h || '').toLowerCase();
+    return kws.some(k => hl.includes(k));
+  });
+  return {
+    azure:    find(['azure price', 'azure/unit', 'azure (']),
+    azureInst:find(['azure instance', 'azure sku', 'azure/sku']),
+    aws:      find(['aws price', 'aws/unit', 'aws (']),
+    awsInst:  find(['aws instance', 'aws sku', 'amazon instance']),
+    gcp:      find(['gcp price', 'gcp/unit', 'gcp (']),
+    gcpInst:  find(['gcp instance', 'gcp sku', 'google instance']),
+    cheapest: find(['cheapest', 'lowest', 'best price', 'winner']),
+  };
+}
+
+async function runDocxUpdate() {
+  if (!xlFile) { toast('Please upload a Word file first'); return; }
+  const btn = document.getElementById('xl-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spin-sm"></div> Reading Word document...';
+
+  try {
+    const arrayBuffer = await xlFile.arrayBuffer();
+
+    // ── A. Load DOCX as ZIP and parse document.xml ──────────────
+    if (typeof JSZip === 'undefined') throw new Error('JSZip library not loaded. Check your internet connection and refresh.');
+    const zip     = await JSZip.loadAsync(arrayBuffer);
+    const docFile = zip.file('word/document.xml');
+    if (!docFile) throw new Error('Not a valid .docx file — could not find word/document.xml');
+    const docXml  = await docFile.async('string');
+
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(docXml, 'application/xml');
+    if (xmlDoc.querySelector('parsererror')) throw new Error('DOCX XML could not be parsed. File may be corrupted.');
+
+    // ── B. Extract all tables ────────────────────────────────────
+    const tables = wExtractTables(xmlDoc);
+    if (!tables.length) throw new Error('No tables found in the Word document. The AI price-fill feature works on documents with tables containing cloud resource rows.');
+
+    // ── C. Build payload for Claude ──────────────────────────────
+    btn.innerHTML = '<div class="spin-sm"></div> AI analysing document...';
+    const tablesText = wTablesToText(tables);
+
+    const prompt = `You are a cloud pricing expert. Here is a Word document with tables containing cloud resources that need prices filled in.
+
+${tablesText.slice(0, 14000)}
+
+For EVERY row that is a cloud resource (VM, GPU, storage, database, networking, security, AI service, etc.):
+- Identify which columns are Azure, AWS, and GCP price columns from the header row
+- Fill in current approximate list prices
+- Use NUMERIC values only — no $ sign, no /hr units — just the decimal number e.g. 0.192
+- Include specific instance/SKU names
+- Region: Azure=UAE North, AWS=me-central-1 (UAE), GCP=me-central1 (Qatar/nearest)
+
+Return ONLY valid JSON, no markdown:
+{
+  "tables": [
+    {
+      "table_index": 0,
+      "azure_col": 2,
+      "aws_col": 4,
+      "gcp_col": 6,
+      "cheapest_col": 8,
+      "updates": [
+        {"row": 2, "azure_price": 0.192, "azure_instance": "D4s_v5", "aws_price": 0.188, "aws_instance": "m6i.xlarge", "gcp_price": 0.190, "gcp_instance": "n2-standard-4", "cheapest": "AWS"}
+      ]
+    }
+  ],
+  "total_updates": N,
+  "summary": "one sentence"
+}
+Row numbers are 1-indexed (1 = header). Only include rows with actual resources.`;
+
+    const raw = await callClaude(
+      [{ role: 'user', content: prompt }],
+      'You are a cloud pricing expert. Return ONLY valid JSON as specified. No markdown, no explanation.',
+      4000
+    );
+    const result = extractJSON(raw);
+    const tableResults = result.tables || [];
+
+    if (!tableResults.length || !tableResults.some(t => (t.updates||[]).length > 0)) {
+      throw new Error('AI returned no pricing updates. Make sure the document has tables with identifiable cloud resource rows and price columns.');
+    }
+
+    // ── D. Write prices back into the XML ───────────────────────
+    btn.innerHTML = '<div class="spin-sm"></div> Writing prices to document...';
+    const tblEls = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, 'tbl'));
+    let priceCount = 0, rowCount = 0;
+
+    tableResults.forEach(tbl => {
+      const tblEl = tblEls[tbl.table_index];
+      if (!tblEl) return;
+      const trEls = Array.from(tblEl.getElementsByTagNameNS(W_NS, 'tr'));
+      const aCol  = tbl.azure_col    ?? -1;
+      const wCol  = tbl.aws_col      ?? -1;
+      const gCol  = tbl.gcp_col      ?? -1;
+      const chCol = tbl.cheapest_col ?? -1;
+
+      (tbl.updates || []).forEach(u => {
+        const rowIdx = (u.row || 1) - 1; // convert to 0-based
+        const trEl   = trEls[rowIdx];
+        if (!trEl) return;
+        const tcEls = Array.from(trEl.getElementsByTagNameNS(W_NS, 'tc'));
+        let wrote = false;
+
+        const writeCell = (col, val) => {
+          if (col < 0 || col >= tcEls.length || val === null || val === undefined) return;
+          wSetCellText(xmlDoc, tcEls[col], String(val));
+        };
+
+        const priceStr = (price) => {
+          const n = parseFloat(String(price || '').replace(/[^0-9.]/g, ''));
+          return isNaN(n) ? null : '$' + n.toFixed(4);
+        };
+
+        if (u.azure_price !== undefined) { writeCell(aCol,  priceStr(u.azure_price)); priceCount++; wrote = true; }
+        if (u.aws_price   !== undefined) { writeCell(wCol,  priceStr(u.aws_price));   priceCount++; }
+        if (u.gcp_price   !== undefined) { writeCell(gCol,  priceStr(u.gcp_price));   priceCount++; }
+        if (u.cheapest)                  { writeCell(chCol, u.cheapest); }
+        if (u.azure_instance) writeCell(aCol + 1, u.azure_instance);
+        if (u.aws_instance)   writeCell(wCol + 1, u.aws_instance);
+        if (u.gcp_instance)   writeCell(gCol + 1, u.gcp_instance);
+
+        if (wrote) rowCount++;
+      });
+    });
+
+    if (priceCount === 0) throw new Error('Prices were generated but could not be written — column indices may not match the document structure. Try adding column headers like "Azure Price", "AWS Price", "GCP Price".');
+
+    // ── E. Re-serialize XML and repackage DOCX ───────────────────
+    const serializer = new XMLSerializer();
+    const newDocXml  = serializer.serializeToString(xmlDoc);
+    zip.file('word/document.xml', newDocXml);
+    xlDocxBlob = await zip.generateAsync({
+      type: 'blob',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      compression: 'DEFLATE'
+    });
+    xlOutName = xlFile.name.replace(/\.docx$/i, '') + '_PricingUpdated.docx';
+
+    document.getElementById('xl-result-title').textContent = '✅ Word Document Updated Successfully';
+    document.getElementById('xl-result-body').innerHTML = `
+      <div style="font-size:13px;color:var(--text2);line-height:1.8">
+        ✅ AI filled <strong style="color:var(--text)">${priceCount} price cells</strong> across
+        <strong style="color:var(--text)">${rowCount} cloud resource rows</strong>
+        in your Word document.<br>
+        ${result.summary ? `<em style="color:var(--text3);font-size:12px">${esc(result.summary)}</em><br>` : ''}
+        <span style="font-size:11px;color:var(--text3)">
+          Prices are approximate vendor list prices (Azure UAE North · AWS me-central-1 · GCP me-central1).
+          All original formatting, fonts and styles are preserved.
+        </span>
+      </div>`;
+    document.getElementById('xl-result').classList.add('show');
+    document.getElementById('xl-download-btn').textContent = '⬇ Download Updated Word Document';
+    toast(`Done! ${priceCount} prices filled in Word doc`, 'success');
+
+  } catch(e) {
+    toast('Error: ' + e.message);
+    console.error('DOCX update error:', e);
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Fill Prices with AI';
+}
+
+function downloadDocx() {
+  if (!xlDocxBlob) return;
+  const url = URL.createObjectURL(xlDocxBlob);
+  const a = document.createElement('a'); a.href = url; a.download = xlOutName; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Download Word template ─────────────────────────────────────────────────────
+function downloadDocxTemplate() {
+  // Build a minimal DOCX from scratch using JSZip
+  const NS_W   = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const headers = ['Resource / Service','Category','Azure Price\n(UAE North)','Azure Instance/SKU','AWS Price\n(me-central-1)','AWS Instance/SKU','GCP Price\n(me-central1)','GCP Instance/SKU','Cheapest','Notes'];
+  const rows = [
+    ['General Purpose VM (4 vCPU, 16GB)','Compute','','','','','','','',''],
+    ['H100 GPU Node (8×)','GPU','','','','','','','',''],
+    ['A100 GPU (1×)','GPU','','','','','','','',''],
+    ['Premium SSD Block Storage (1TB)','Storage','','','','','','','',''],
+    ['Object Storage Hot Tier (1TB)','Storage','','','','','','','',''],
+    ['Managed SQL DB (4 vCPU)','Database','','','','','','','',''],
+    ['Redis Cache (13GB)','Database','','','','','','','',''],
+    ['Outbound Egress (1TB)','Networking','','','','','','','',''],
+    ['Standard Load Balancer','Networking','','','','','','','',''],
+    ['Key Management Service','Security','','','','','','','',''],
+    ['LLM API (1M tokens)','AI/ML','','','','','','','',''],
+    ['Speech-to-Text (60 min)','AI/ML','','','','','','','',''],
+  ];
+
+  const mkCell = (text, bold) => {
+    const rpr = bold ? '<w:rPr><w:b/><w:color w:val="1E1864"/></w:rPr>' : '<w:rPr><w:color w:val="374151"/></w:rPr>';
+    const bg  = bold ? '<w:shd w:val="clear" w:color="auto" w:fill="E8E4FF"/>' : '';
+    return `<w:tc><w:tcPr>${bg}<w:tcW w:w="1200" w:type="dxa"/></w:tcPr><w:p><w:r>${rpr}<w:t xml:space="preserve">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</w:t></w:r></w:p></w:tc>`;
+  };
+  const mkRow = (cells, isBold) => `<w:tr>${cells.map(c => mkCell(c, isBold)).join('')}</w:tr>`;
+
+  const tableXml = `<w:tbl>
+    <w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/><w:tblBorders>
+      <w:top w:val="single" w:sz="4" w:color="C8BCDF"/>
+      <w:left w:val="single" w:sz="4" w:color="C8BCDF"/>
+      <w:bottom w:val="single" w:sz="4" w:color="C8BCDF"/>
+      <w:right w:val="single" w:sz="4" w:color="C8BCDF"/>
+      <w:insideH w:val="single" w:sz="4" w:color="C8BCDF"/>
+      <w:insideV w:val="single" w:sz="4" w:color="C8BCDF"/>
+    </w:tblBorders></w:tblPr>
+    ${mkRow(headers, true)}
+    ${rows.map(r => mkRow(r, false)).join('\n')}
+  </w:tbl>`;
+
+  const docBody = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:body>
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="1A1464"/></w:rPr><w:t>UAE Cloud Infrastructure Pricing Template</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:color w:val="6B7280"/><w:sz w:val="18"/></w:rPr><w:t>Upload this file to Cloud Pricer → Fill Prices with AI to auto-fill all price columns | Azure UAE North · AWS me-central-1 · GCP me-central1</w:t></w:r></w:p>
+<w:p/>
+${tableXml}
+<w:sectPr><w:pgSz w:w="20000" w:h="15840"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>
+</w:body>
+</w:document>`;
+
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/></w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/>
+    <w:tblPr><w:tblBorders>
+      <w:top w:val="single" w:sz="4" w:color="auto"/><w:left w:val="single" w:sz="4" w:color="auto"/>
+      <w:bottom w:val="single" w:sz="4" w:color="auto"/><w:right w:val="single" w:sz="4" w:color="auto"/>
+      <w:insideH w:val="single" w:sz="4" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:color="auto"/>
+    </w:tblBorders></w:tblPr>
+  </w:style>
+</w:styles>`;
+
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`;
+
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', contentTypes);
+  zip.file('_rels/.rels', rootRels);
+  zip.file('word/document.xml', docBody);
+  zip.file('word/styles.xml', styles);
+  zip.file('word/_rels/document.xml.rels', rels);
+
+  zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'CloudPricing_Template.docx'; a.click();
+      URL.revokeObjectURL(url);
+    });
+}
+
 // ── Excel (SheetJS — fully client-side) ────────────────────────────────────────
 function onXlFile(input) {
   const f = input.files[0]; if (!f) return;
   xlFile = f;
+  const isDoc = /\.docx$/i.test(f.name);
+  // Auto-switch format
+  if (isDoc) { xlFileFormat = 'doc'; }
+  else { xlFileFormat = 'xl'; }
+  const iconEl = document.getElementById('xl-fp-icon');
+  if (iconEl) iconEl.textContent = isDoc ? '📝' : '📊';
+  const badgeEl = document.getElementById('xl-type-badge');
+  if (badgeEl) { badgeEl.textContent = isDoc ? 'Word .docx' : 'Excel'; badgeEl.style.display = 'inline'; }
   document.getElementById('xl-fname').textContent = f.name;
   document.getElementById('xl-fsize').textContent = fmtSize(f.size);
   document.getElementById('xl-fp').classList.add('show');
   document.getElementById('xl-result').classList.remove('show');
+  // Reset download button text
+  const dl = document.getElementById('xl-download-btn');
+  if (dl) dl.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download Updated File';
 }
 function clearXl() {
-  xlFile = null; xlWorkbook = null;
+  xlFile = null; xlWorkbook = null; xlDocxBlob = null;
   document.getElementById('xl-file').value = '';
   document.getElementById('xl-fp').classList.remove('show');
   document.getElementById('xl-result').classList.remove('show');
+  const badgeEl = document.getElementById('xl-type-badge');
+  if (badgeEl) badgeEl.style.display = 'none';
 }
 
-const XL_SYSTEM = `You are a cloud pricing expert. You will receive spreadsheet data containing cloud resource rows with missing pricing. 
-For each row that represents a cloud resource (VM, storage, GPU, database, network, etc.):
-1. Identify the resource type from the row content
-2. Fill in current approximate prices for Azure, AWS, and GCP where columns exist
-3. Note the cheapest provider
+// ── Find the header row (first row that contains azure/aws/gcp + price/resource) ──
+function findHeaderRow(rows) {
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const s = rows[i].join(' ').toLowerCase();
+    const hasProviders = s.includes('azure') || s.includes('aws') || s.includes('gcp') || s.includes('amazon') || s.includes('google');
+    const hasContext   = s.includes('price') || s.includes('service') || s.includes('resource') || s.includes('instance') || s.includes('cost') || s.includes('sku');
+    if (hasProviders && hasContext) return i;
+  }
+  return 0; // fallback: first row
+}
 
-Respond ONLY with valid JSON:
-{"updates":[{"row":2,"azure_price":"$0.192/hr","azure_instance":"D4s_v5","aws_price":"$0.192/hr","aws_instance":"m6i.xlarge","gcp_price":"$0.190/hr","gcp_instance":"n2-standard-4","cheapest":"GCP"}],"count":N,"summary":"brief summary"}
-Row numbers start at 2 (row 1 is header). Only include rows where you added data. No markdown.`;
+// ── Multi-keyword column finder ───────────────────────────────────────────────
+function findCol(headers, keywords) {
+  const kws = Array.isArray(keywords) ? keywords : [keywords];
+  return headers.findIndex(h => {
+    const hl = String(h || '').toLowerCase().replace(/\n/g,' ').replace(/\s+/g,' ');
+    return kws.some(k => hl.includes(k.toLowerCase()));
+  });
+}
+
+// ── Parse a price string or number to a float ─────────────────────────────────
+function parsePrice(v) {
+  if (v === null || v === undefined) return null;
+  const n = parseFloat(String(v).replace(/[^0-9.]/g,''));
+  return isNaN(n) || n <= 0 ? null : n;
+}
+
+// ── Write a numeric value to a cell (so ISNUMBER() formulas work) ────────────
+function writeNumCell(sheet, excelRow, col, value) {
+  if (col < 0 || value === null) return false;
+  const addr = XLSX.utils.encode_cell({ r: excelRow - 1, c: col });
+  sheet[addr] = { t: 'n', v: value, z: '#,##0.0000' };
+  // Update sheet range
+  const ref = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+  ref.e.r = Math.max(ref.e.r, excelRow - 1);
+  ref.e.c = Math.max(ref.e.c, col);
+  sheet['!ref'] = XLSX.utils.encode_range(ref);
+  return true;
+}
+
+// ── Write a text value to a cell ──────────────────────────────────────────────
+function writeStrCell(sheet, excelRow, col, value) {
+  if (col < 0 || !value) return;
+  const addr = XLSX.utils.encode_cell({ r: excelRow - 1, c: col });
+  sheet[addr] = { t: 's', v: String(value) };
+}
 
 async function runXlUpdate() {
   if (!xlFile) { toast('Please upload a spreadsheet first'); return; }
   const btn = document.getElementById('xl-btn');
-  btn.disabled = true; btn.innerHTML = '<div class="spin-sm"></div> Reading spreadsheet...';
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spin-sm"></div> Reading file...';
+
   try {
-    // Read file with SheetJS
+    // ── 1. Read file with SheetJS ─────────────────────────────────
     const arrayBuffer = await xlFile.arrayBuffer();
     xlWorkbook = XLSX.read(arrayBuffer, { type: 'array' });
     const sheetName = xlWorkbook.SheetNames[0];
     const sheet = xlWorkbook.Sheets[sheetName];
-    const csvData = XLSX.utils.sheet_to_csv(sheet);
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
-    btn.innerHTML = '<div class="spin-sm"></div> Asking AI to fill prices...';
-    const prompt = `Here is the spreadsheet data (CSV format):\n\n${csvData.slice(0, 6000)}\n\nIdentify all cloud resource rows and fill in current Azure, AWS, and GCP pricing.`;
-    const raw = await callClaude([{ role:'user', content: prompt }], XL_SYSTEM, 2000);
+    if (!rows.length) throw new Error('Spreadsheet appears to be empty.');
+
+    // ── 2. Find actual header row (handles title/instruction rows) ─
+    const headerRowIdx = findHeaderRow(rows);
+    const headers = rows[headerRowIdx];
+    const dataStartRow = headerRowIdx + 1; // 0-based index of first data row
+
+    // ── 3. Detect column positions from header ────────────────────
+    const azurePriceCol   = findCol(headers, ['azure price','azure/unit','azure (','azure price/unit','az price']);
+    const azureInstCol    = findCol(headers, ['azure instance','azure sku','azure/sku','az instance','az sku']);
+    const awsPriceCol     = findCol(headers, ['aws price','aws/unit','aws (','aws price/unit','amazon price']);
+    const awsInstCol      = findCol(headers, ['aws instance','aws sku','aws/sku','amazon instance','amazon sku']);
+    const gcpPriceCol     = findCol(headers, ['gcp price','gcp/unit','gcp (','gcp price/unit','google price']);
+    const gcpInstCol      = findCol(headers, ['gcp instance','gcp sku','gcp/sku','google instance','google sku']);
+    const cheapestCol     = findCol(headers, ['cheapest','lowest','best price','winner','recommended']);
+
+    // Fallbacks for common template layouts
+    const aPrice = azurePriceCol  >= 0 ? azurePriceCol  : 3;  // col D in standard template
+    const aInst  = azureInstCol   >= 0 ? azureInstCol   : 2;  // col C
+    const wPrice = awsPriceCol    >= 0 ? awsPriceCol    : 5;  // col F
+    const wInst  = awsInstCol     >= 0 ? awsInstCol     : 4;  // col E
+    const gPrice = gcpPriceCol    >= 0 ? gcpPriceCol    : 7;  // col H
+    const gInst  = gcpInstCol     >= 0 ? gcpInstCol     : 6;  // col G
+    const chCol  = cheapestCol    >= 0 ? cheapestCol    : 11;
+
+    // ── 4. Build smart CSV for Claude (header + data, up to 14K chars) ──
+    const toCSVRow = r => r.map(c => {
+      const v = String(c || '').replace(/\n/g,' ').replace(/"/g,"'");
+      return v.includes(',') ? `"${v}"` : v;
+    }).join(',');
+
+    const headerLine = toCSVRow(headers);
+    const dataLines  = rows.slice(dataStartRow)
+      .map((r, i) => ({ r, excelRow: headerRowIdx + 2 + i })) // real Excel row number (1-indexed)
+      .filter(({ r }) => r.some(c => String(c||'').trim() && !String(c||'').startsWith('←') && !String(c||'').match(/^_CAT/)))
+      .map(({ r, excelRow }) => excelRow + '|' + toCSVRow(r));
+
+    const csvPayload = headerLine + '\n' + dataLines.join('\n');
+    const csvToSend  = csvPayload.slice(0, 14000);
+
+    // ── 5. Build prompt with explicit column positions for Claude ──
+    btn.innerHTML = '<div class="spin-sm"></div> AI analysing resources...';
+
+    const colMap = [
+      `Azure price → column index ${aPrice} ("${headers[aPrice]||'Azure Price'}")`,
+      `Azure SKU → column index ${aInst} ("${headers[aInst]||'Azure Instance'}")`,
+      `AWS price → column index ${wPrice} ("${headers[wPrice]||'AWS Price'}")`,
+      `AWS SKU → column index ${wInst} ("${headers[wInst]||'AWS Instance'}")`,
+      `GCP price → column index ${gPrice} ("${headers[gPrice]||'GCP Price'}")`,
+      `GCP SKU → column index ${gInst} ("${headers[gInst]||'GCP Instance'}")`,
+      cheapestCol >= 0 ? `Cheapest → column index ${chCol} ("${headers[chCol]||'Cheapest'}")` : ''
+    ].filter(Boolean).join('; ');
+
+    const prompt = `You are a cloud pricing expert. Fill in CURRENT approximate list prices for cloud resources.
+
+COLUMN MAPPING: ${colMap}
+
+The data uses format: EXCEL_ROW_NUMBER|col0,col1,col2,...
+The Excel row number is the FIRST field before "|" — use this as excel_row in your response.
+
+SPREADSHEET DATA:
+${csvToSend}
+
+RULES:
+- Only process rows that are actual cloud resources (VMs, GPUs, storage, databases, networking, security, AI services)
+- Skip section headers, totals, empty rows, and decorative rows
+- Prices MUST be PLAIN NUMBERS only — no $ sign, no /hr, no units — just the decimal e.g. 0.192
+- Use HOURLY rates for compute/VM/GPU resources; MONTHLY rates for storage (per GB or TB/mo)
+- Match the unit shown in the spreadsheet row if visible
+- Include specific SKU/instance names (e.g. D4s_v5, m6i.xlarge, n2-standard-4)
+- Region context: Azure=UAE North, AWS=me-central-1 (UAE), GCP=me-central1 (Qatar/nearest)
+
+Respond with ONLY valid JSON, absolutely no markdown or explanation:
+{"updates":[{"excel_row":5,"azure_price":0.192,"azure_instance":"D4s_v5","aws_price":0.188,"aws_instance":"m6i.xlarge","gcp_price":0.190,"gcp_instance":"n2-standard-4","cheapest":"AWS"}],"count":N,"summary":"one sentence summary"}`;
+
+    const raw = await callClaude(
+      [{ role: 'user', content: prompt }],
+      'You are a cloud pricing expert. Return ONLY valid JSON as specified. No markdown, no explanation, no code fences.',
+      4000
+    );
     const result = extractJSON(raw);
+    const updates = result.updates || [];
 
-    btn.innerHTML = '<div class="spin-sm"></div> Writing updated file...';
-    // Apply updates back to workbook
-    const rows = XLSX.utils.sheet_to_json(sheet, { header:1 });
-    const headers = rows[0] || [];
+    if (!updates.length) {
+      throw new Error('AI returned no pricing data. Make sure the file contains cloud resource rows with identifiable Azure/AWS/GCP price columns.');
+    }
 
-    // Find column indices for Azure/AWS/GCP price columns
-    const colIdx = (name) => headers.findIndex(h => String(h||'').toLowerCase().includes(name.toLowerCase()));
-    const azureCol  = Math.max(colIdx('azure'), colIdx('az price'), 2);
-    const awsCol    = Math.max(colIdx('aws'),   colIdx('amazon'),   4);
-    const gcpCol    = Math.max(colIdx('gcp'),   colIdx('google'),   6);
+    // ── 6. Write prices back — as NUMBERS so ISNUMBER() formulas work ──
+    btn.innerHTML = '<div class="spin-sm"></div> Writing prices to file...';
+    let priceCount = 0, rowCount = 0;
 
-    (result.updates || []).forEach(u => {
-      const r = u.row - 1; // 0-based
-      if (!rows[r]) return;
-      const cellToAddr = (row, col) => XLSX.utils.encode_cell({r: row-1, c: col});
-      if (u.azure_price && azureCol >= 0) {
-        const addr = cellToAddr(u.row, azureCol);
-        sheet[addr] = { t:'s', v: u.azure_instance ? `${u.azure_price} (${u.azure_instance})` : u.azure_price };
-      }
-      if (u.aws_price && awsCol >= 0) {
-        const addr = cellToAddr(u.row, awsCol);
-        sheet[addr] = { t:'s', v: u.aws_instance ? `${u.aws_price} (${u.aws_instance})` : u.aws_price };
-      }
-      if (u.gcp_price && gcpCol >= 0) {
-        const addr = cellToAddr(u.row, gcpCol);
-        sheet[addr] = { t:'s', v: u.gcp_instance ? `${u.gcp_price} (${u.gcp_instance})` : u.gcp_price };
-      }
+    updates.forEach(u => {
+      const excelRow = parseInt(u.excel_row);
+      if (!excelRow || excelRow < 1) return;
+      let wroteAny = false;
+
+      // Azure
+      const ap = parsePrice(u.azure_price);
+      if (ap !== null) { if (writeNumCell(sheet, excelRow, aPrice, ap)) { priceCount++; wroteAny = true; } }
+      if (u.azure_instance) writeStrCell(sheet, excelRow, aInst, u.azure_instance);
+
+      // AWS
+      const wp = parsePrice(u.aws_price);
+      if (wp !== null) { if (writeNumCell(sheet, excelRow, wPrice, wp)) { priceCount++; wroteAny = true; } }
+      if (u.aws_instance) writeStrCell(sheet, excelRow, wInst, u.aws_instance);
+
+      // GCP
+      const gp = parsePrice(u.gcp_price);
+      if (gp !== null) { if (writeNumCell(sheet, excelRow, gPrice, gp)) { priceCount++; wroteAny = true; } }
+      if (u.gcp_instance) writeStrCell(sheet, excelRow, gInst, u.gcp_instance);
+
+      // Cheapest provider
+      if (u.cheapest) writeStrCell(sheet, excelRow, chCol, u.cheapest);
+
+      if (wroteAny) rowCount++;
     });
 
-    // Prepare download
-    xlOutName = xlFile.name.replace(/\.(xlsx?|csv)$/i,'') + '_PricingUpdated.xlsx';
-    const updates = result.count || (result.updates||[]).length;
+    if (priceCount === 0) throw new Error('Prices were returned but could not be written — column positions may not match. Try the template format.');
+
+    xlOutName = xlFile.name.replace(/\.(xlsx?|csv)$/i, '') + '_PricingUpdated.xlsx';
 
     document.getElementById('xl-result-body').innerHTML = `
-      <div style="font-size:13px;color:var(--text2);line-height:1.7">
-        AI identified and filled <strong style="color:var(--text)">${updates} cells</strong> with current cloud pricing data across Azure, AWS, and GCP.
-        ${result.summary ? `<br><em>${esc(result.summary)}</em>` : ''}
-        The original spreadsheet structure is preserved.
+      <div style="font-size:13px;color:var(--text2);line-height:1.8">
+        ✅ AI filled <strong style="color:var(--text)">${priceCount} price cells</strong> across
+        <strong style="color:var(--text)">${rowCount} cloud resource rows</strong>
+        (Azure UAE North · AWS me-central-1 · GCP me-central1).<br>
+        ${result.summary ? `<em style="color:var(--text3);font-size:12px">${esc(result.summary)}</em><br>` : ''}
+        <span style="font-size:11px;color:var(--text3)">
+          Prices are approximate vendor list prices — verify before procurement.
+          Monthly cost columns (if present) will auto-calculate from these numbers.
+        </span>
       </div>`;
     document.getElementById('xl-result').classList.add('show');
-    toast('Prices updated! ' + updates + ' cells filled', 'success');
-  } catch(e) { toast('Error: ' + e.message); }
+    toast(`Done! ${priceCount} prices filled across ${rowCount} rows`, 'success');
+
+  } catch(e) {
+    toast('Error: ' + e.message);
+    console.error('Excel update error:', e);
+  }
+
   btn.disabled = false;
   btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Fill Prices with AI';
 }
 
 function downloadXl() {
   if (!xlWorkbook) return;
-  const wbout = XLSX.write(xlWorkbook, { type:'array', bookType:'xlsx' });
-  const blob = new Blob([wbout], { type:'application/octet-stream' });
+  const wbout = XLSX.write(xlWorkbook, { type: 'array', bookType: 'xlsx' });
+  const blob = new Blob([wbout], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = xlOutName; a.click();
   URL.revokeObjectURL(url);
@@ -1018,7 +1545,7 @@ document.addEventListener('dragover', e => e.preventDefault());
 document.addEventListener('drop', e => {
   e.preventDefault();
   const f = e.dataTransfer.files[0];
-  if (f && /\.(xlsx?|csv)$/i.test(f.name)) {
+  if (f && /\.(xlsx?|xls|csv|docx)$/i.test(f.name)) {
     const dt = new DataTransfer(); dt.items.add(f);
     document.getElementById('xl-file').files = dt.files;
     onXlFile(document.getElementById('xl-file'));
